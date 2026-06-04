@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>PCF FOG Foundation Health Check</title>
+  <style>
+
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+.display.math{display: block; text-align: center; margin: 0.5rem auto;}
+</style>
+  <style type="text/css">
+body {
+font-family: Arial, sans-serif;
+font-size: 11pt;
+line-height: 1.6;
+color: #1A1A1A;
+background: #FFFFFF;
+max-width: 900px;
+margin: 2rem auto;
+padding: 0 1.5rem;
+}
+
+.brand-header {
+text-align: center;
+margin: 0 0 6px;
+}
+.brand-logo {
+height: 42px;
+width: auto;
+}
+
+h1 {
+font-size: 17pt;
+color: #1A1A1A;
+border-bottom: 3px solid #FF6600;
+padding-bottom: 8px;
+margin-top: 4px;
+margin-bottom: 16px;
+text-align: center;
+}
+h2 {
+font-size: 15pt;
+color: #1A1A1A;
+border-left: 4px solid #FF6600;
+padding-left: 10px;
+margin-top: 28px;
+margin-bottom: 10px;
+}
+h3 {
+font-size: 12pt;
+color: #FF6600;
+margin-top: 18px;
+margin-bottom: 6px;
+}
+h4 {
+font-size: 11pt;
+color: #4A4A4A;
+margin-top: 12px;
+}
+
+p {
+color: #1A1A1A;
+margin-bottom: 10px;
+}
+
+hr {
+border: none;
+border-top: 2px solid #FF6600;
+margin: 22px 0;
+opacity: 0.3;
+}
+
+blockquote {
+border-left: 4px solid #FF6600;
+background-color: #FFF3EB;
+margin: 14px 0;
+padding: 10px 16px;
+border-radius: 0 4px 4px 0;
+color: #1A1A1A;
+font-size: 12pt;
+}
+
+code {
+background-color: #FFF3EB;
+border: 1px solid #FFE0C8;
+border-radius: 3px;
+padding: 1px 5px;
+font-size: 9pt;
+color: #CC5200;
+word-break: break-all;
+}
+
+pre {
+background-color: #F7F7F7;
+border: 1px solid #DDDDDD;
+border-left: 3px solid #FF6600;
+border-radius: 0 4px 4px 0;
+padding: 12px 14px;
+white-space: pre-wrap;
+word-wrap: break-word;
+word-break: break-all;
+font-size: 9pt;
+line-height: 1.45;
+width: 100%;
+box-sizing: border-box;
+margin: 10px 0;
+}
+pre code {
+background: none;
+border: none;
+padding: 0;
+color: #1A1A1A;
+word-break: break-all;
+white-space: pre-wrap;
+}
+
+table {
+width: 100%;
+border-collapse: collapse;
+margin: 16px 0;
+font-size: 10pt;
+}
+thead tr {
+background-color: #C8C8C8;
+color: #1A1A1A;
+}
+th {
+padding: 9px 12px;
+text-align: left;
+font-weight: bold;
+color: #1A1A1A;
+}
+td {
+padding: 8px 12px;
+border: 1px solid #DDDDDD;
+color: #1A1A1A;
+}
+tr:nth-child(even) td {
+background-color: #FFF3EB;
+}
+tr:nth-child(odd) td {
+background-color: #FFFFFF;
+}
+
+a {
+color: #FF6600;
+text-decoration: none;
+}
+
+ul, ol {
+margin: 8px 0 12px 20px;
+color: #1A1A1A;
+}
+li {
+margin-bottom: 4px;
+}
+
+em {
+color: #6B6B6B;
+}
+
+@media print {
+body { margin: 0; max-width: 100%; }
+h2 { page-break-after: avoid; }
+table { page-break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<div class="brand-header">
+<svg class="brand-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 71.68 36" role="img" aria-label="Fiserv"><rect x="67.1" y="31.11" width="4.58" height="4.58" fill="#f60" /><polygon points="57.82 10.73 60.55 31.18 63.27 10.73 67.51 10.73 63.54 35.68 57.5 35.68 53.57 10.73 57.82 10.73" fill="#f60"></polygon><path d="M2.35,10.73H0v3.32H2.35v21.64H6.49V14.04h2.91v-3.32h-2.91V5.66c0-.74,.15-1.31,.51-1.69,.36-.39,.91-.57,1.65-.57h.75V0h-1.5c-1.84,0-3.61,.39-4.45,1.19-.84,.8-1.09,2.04-1.09,3.81v5.72Z" fill="#f60" /><rect x="10.69" y="10.73" width="4.15" height="24.95" fill="#f60" /><path d="M34,24.62h8.65v-7.69c-.01-4.6-2.22-6.49-6.41-6.49s-6.4,1.88-6.4,6.52v12.64c.01,4.22,2.57,6.4,6.4,6.4s6.4-1.8,6.42-6.4v-2h-4.01s0,1.78,0,2.37c0,1.69-.63,2.86-2.33,2.86s-2.32-1.18-2.32-2.86v-5.35Zm0-8.52c0-1.41,.37-2.87,2.31-2.87s2.33,1.44,2.33,2.86v5.16h-4.64v-5.16Z" fill="#f60" /><path d="M24.17,21.5c-3.13-2.75-3.39-3.13-3.39-5.16,0-1.74,.15-2.79,1.71-2.79s1.76,1.04,1.76,2.81v2.3h4v-3.76c-.01-2.95-2.28-4.45-5.85-4.45s-5.8,1.17-5.82,5.89c0,.8,0,.8,0,.49,0,1.48,.01,3.83,3.68,6.98l1.05,.9c2.7,2.28,3,2.55,2.99,5.26,0,1.67-.1,2.94-1.86,2.94s-1.86-1.28-1.86-2.06v-3.19h-4.2v3.29c0,4.05,2.64,5.06,6.06,5.06s6.06-1.01,6.06-6.23v-.43c0-3.64-.67-4.62-4.33-7.84Z" fill="#f60" /><path d="M48.2,13.3v-2.57h-3.78v24.95h4.08V18.29c0-1.34,.44-2.23,1.2-2.75,.72-.5,1.61-.67,2.74-.68v-4.42c-2.16,.04-3.1,.47-4.2,2.76l-.04,.09Z" fill="#f60" /></svg>
+</div>
+<h1 id="pcf-fog-foundation-health-check">PCF FOG Foundation Health
+Check</h1>
+<blockquote>
+<p><strong>⚠️ Verdict: CAUTION</strong> — PROCEED WITH CAUTION — 2
+warning(s); review before upgrading.</p>
+<p><strong>Health score: 84%</strong></p>
+</blockquote>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<tbody>
+<tr>
+<td><strong>Director</strong></td>
+<td><code>192.168.2.2</code> — p-bosh v282.1.11 (00000000)
+(vsphere_cpi)</td>
+</tr>
+<tr>
+<td><strong>Generated</strong></td>
+<td>2026-06-04 12:38 UTC</td>
+</tr>
+<tr>
+<td><strong>Run on</strong></td>
+<td><code>ubuntu@opsman-skynetsystems-io</code></td>
+</tr>
+<tr>
+<td><strong>Deployments</strong></td>
+<td>cf-bfa9f18ae9bf61f7f155</td>
+</tr>
+<tr>
+<td><strong>Stemcell(s) in use</strong></td>
+<td>bosh-vsphere-esxi-ubuntu-jammy-go_agent/1.1193</td>
+</tr>
+<tr>
+<td><strong>Checks (OK / Warn / Crit)</strong></td>
+<td>24 / 2 / 0</td>
+</tr>
+<tr>
+<td><strong>Health score</strong></td>
+<td><strong>84%</strong></td>
+</tr>
+</tbody>
+</table>
+<h2 id="summary-by-section">Summary by section</h2>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th style="text-align: right;">✅ OK</th>
+<th style="text-align: right;">⚠️ Warn</th>
+<th style="text-align: right;">❌ Crit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BOSH Director</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>VM &amp; Process Health</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>VM Resource Utilization</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>Allocated vs Utilized (per VM)</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>Diego Cells</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>Cloud Foundry API</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>Upgrade Readiness</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>Certificates</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>MySQL / Galera Cluster</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+</tbody>
+</table>
+<h2 id="bosh-director">1. BOSH Director</h2>
+<ul>
+<li>✅ Director reachable: p-bosh (v282.1.11 (00000000),
+vsphere_cpi)</li>
+<li>✅ No active deployment locks.</li>
+<li>✅ No in-flight BOSH tasks.</li>
+<li>✅ disk /var/vcap/store: 45% used</li>
+<li>✅ disk /var/vcap/data: 11% used</li>
+<li>✅ disk /: 71% used</li>
+<li>✅ memory: 38% (2979/7937 MB)</li>
+<li>✅ monit: all 23 director processes running</li>
+</ul>
+<p><em>Director VM: memory 38% (2979/7937 MB), load 0.08 over 2 vCPU, 23
+monit processes running.</em></p>
+<h2 id="vm-process-health">2. VM &amp; Process Health</h2>
+<ul>
+<li>✅ [cf-bfa9f18ae9bf61f7f155] all 5 VM(s) and their processes are
+running.</li>
+</ul>
+<h2 id="vm-resource-utilization">3. VM Resource Utilization</h2>
+<table>
+<thead>
+<tr>
+<th>Instance</th>
+<th>VM Type</th>
+<th style="text-align: right;">CPU%</th>
+<th style="text-align: right;">Mem%</th>
+<th style="text-align: right;">Eph%</th>
+<th style="text-align: right;">Per%</th>
+<th style="text-align: right;">Sys%</th>
+<th style="text-align: right;">Load</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>blobstore/dfcb4200</td>
+<td>medium</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">14</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.02</td>
+</tr>
+<tr>
+<td>compute/587be4c3</td>
+<td>xlarge.disk</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">19</td>
+<td style="text-align: right;">16</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.87</td>
+</tr>
+<tr>
+<td>control/0255a463</td>
+<td>2xlarge</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">54</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.41</td>
+</tr>
+<tr>
+<td>database/7e095dd2</td>
+<td>large</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">19</td>
+<td style="text-align: right;">11</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.34</td>
+</tr>
+<tr>
+<td>router/c5e4e221</td>
+<td>medium</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.02</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>✅ [cf-bfa9f18ae9bf61f7f155] blobstore within thresholds (cpu 1% mem
+15% eph 9% per 14% sys 59%)</li>
+<li>✅ [cf-bfa9f18ae9bf61f7f155] compute within thresholds (cpu 5% mem
+19% eph 16% per –% sys 59%)</li>
+<li>✅ [cf-bfa9f18ae9bf61f7f155] control within thresholds (cpu 4% mem
+36% eph 54% per –% sys 59%)</li>
+<li>✅ [cf-bfa9f18ae9bf61f7f155] database within thresholds (cpu 4% mem
+25% eph 19% per 11% sys 59%)</li>
+<li>✅ [cf-bfa9f18ae9bf61f7f155] router within thresholds (cpu 3% mem
+15% eph 10% per –% sys 59%)</li>
+</ul>
+<p><em>Thresholds — mem 85/95%, disk 80/90%, cpu 80/95%
+(WARN/CRIT).</em></p>
+<h2 id="allocated-vs-utilized">4. Allocated vs Utilized</h2>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+</colgroup>
+<thead>
+<tr>
+<th>Instance</th>
+<th>VM Type</th>
+<th style="text-align: right;">RAM used</th>
+<th style="text-align: right;">RAM alloc</th>
+<th style="text-align: right;">Ephem used</th>
+<th style="text-align: right;">Ephem alloc</th>
+<th style="text-align: right;">RAM ratio</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>blobstore/dfcb4200</td>
+<td>medium</td>
+<td style="text-align: right;">600 MB</td>
+<td style="text-align: right;">4.0 GB</td>
+<td style="text-align: right;">737 MB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">15%</td>
+</tr>
+<tr>
+<td>compute/587be4c3</td>
+<td>xlarge.disk</td>
+<td style="text-align: right;">3.0 GB</td>
+<td style="text-align: right;">16.0 GB</td>
+<td style="text-align: right;">20.5 GB</td>
+<td style="text-align: right;">128.0 GB</td>
+<td style="text-align: right;">19%</td>
+</tr>
+<tr>
+<td>control/0255a463</td>
+<td>2xlarge</td>
+<td style="text-align: right;">12.0 GB</td>
+<td style="text-align: right;">32.0 GB</td>
+<td style="text-align: right;">34.6 GB</td>
+<td style="text-align: right;">64.0 GB</td>
+<td style="text-align: right;">38%</td>
+</tr>
+<tr>
+<td>database/7e095dd2</td>
+<td>large</td>
+<td style="text-align: right;">2.0 GB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">3.0 GB</td>
+<td style="text-align: right;">16.0 GB</td>
+<td style="text-align: right;">25%</td>
+</tr>
+<tr>
+<td>router/c5e4e221</td>
+<td>medium</td>
+<td style="text-align: right;">589 MB</td>
+<td style="text-align: right;">4.0 GB</td>
+<td style="text-align: right;">819 MB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">14%</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>✅ [cf-bfa9f18ae9bf61f7f155] blobstore RAM allocation 15% used (600
+MB of 4.0 GB)</li>
+<li>✅ [cf-bfa9f18ae9bf61f7f155] compute RAM allocation 19% used (3.0 GB
+of 16.0 GB)</li>
+<li>✅ [cf-bfa9f18ae9bf61f7f155] control RAM allocation 38% used (12.0
+GB of 32.0 GB)</li>
+<li>✅ [cf-bfa9f18ae9bf61f7f155] database RAM allocation 25% used (2.0
+GB of 8.0 GB)</li>
+<li>✅ [cf-bfa9f18ae9bf61f7f155] router RAM allocation 14% used (589 MB
+of 4.0 GB)</li>
+</ul>
+<h2 id="diego-cells">5. Diego Cells</h2>
+<p><strong>Cells:</strong> 1 · reserved/capacity 9.1 GB / 15.6 GB (58%)
+· available 6.5 GB · LRPs: RUNNING=17</p>
+<table>
+<thead>
+<tr>
+<th>Cell</th>
+<th style="text-align: right;">Reserved</th>
+<th style="text-align: right;">Capacity</th>
+<th style="text-align: right;">Available</th>
+<th style="text-align: right;">Containers</th>
+<th style="text-align: right;">Reserved%</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>587be4c3</td>
+<td style="text-align: right;">9.1 GB</td>
+<td style="text-align: right;">15.6 GB</td>
+<td style="text-align: right;">6.5 GB</td>
+<td style="text-align: right;">17/249</td>
+<td style="text-align: right;">58%</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>⚠️ Only 1 Diego cell — no peer to evacuate to, so apps WILL restart
+when it is recreated (expected for single-cell/small-footprint; schedule
+a maintenance window).</li>
+</ul>
+<h2 id="cloud-foundry-api">6. Cloud Foundry API</h2>
+<ul>
+<li>✅ CF API reachable: https://api.system.skynetsystems.io (v3.207.0)
+as admin</li>
+</ul>
+<p><em>Orgs: 1 · Spaces: 6 · Apps: 12.</em></p>
+<h2 id="upgrade-readiness">7. Upgrade Readiness</h2>
+<ul>
+<li>⚠️ Staged change: Small Footprint VMware Tanzu Application Service
+[cf] — DELETE (currently v6.0.23) (deployment
+‘cf-bfa9f18ae9bf61f7f155’). Apply or revert before upgrading.</li>
+<li>✅ Stemcells consistent: ubuntu-jammy/1.1193*</li>
+<li>✅ No orphaned persistent disks.</li>
+<li>✅ No ignored instances — every VM will be updated during the
+upgrade.</li>
+</ul>
+<p><strong>Stemcells in use:</strong></p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Deployment</th>
+<th>Stemcell</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>cf-bfa9f18ae9bf61f7f155</td>
+<td>bosh-vsphere-esxi-ubuntu-jammy-go_agent/1.1193</td>
+</tr>
+</tbody>
+</table>
+<h2 id="certificates">8. Certificates</h2>
+<ul>
+<li>✅ No certificates expiring within 1m.</li>
+</ul>
+<h2 id="mysql-galera-cluster">9. MySQL / Galera Cluster</h2>
+<hr />
+<p><em>Generated by pcf-health-check.sh — read-only pre-upgrade health
+check.</em></p>
+</body>
+</html>

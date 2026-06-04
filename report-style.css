@@ -1,0 +1,193 @@
+/* ============================================================
+   Fiserv Brand Style Sheet — PCF / TAS health-check report
+   (rendered via pandoc -> HTML -> Chrome --print-to-pdf)
+   Primary Orange:    #FF6600
+   Dark Charcoal:     #1A1A1A
+   Mid Gray:          #4A4A4A
+   Light Gray text:   #6B6B6B
+   Orange light tint: #FFF3EB
+   Orange mid tint:   #FFE0C8
+   Border gray:       #DDDDDD
+   Background light:  #F7F7F7
+   Table header gray: #C8C8C8
+   White:             #FFFFFF
+   ============================================================ */
+
+body {
+  font-family: Arial, sans-serif;
+  font-size: 11pt;
+  line-height: 1.6;
+  color: #1A1A1A;
+  background: #FFFFFF;
+  max-width: 900px;
+  margin: 2rem auto;
+  padding: 0 1.5rem;
+}
+
+/* Brand header — Fiserv logo centered above the report title. */
+.brand-header {
+  text-align: center;
+  margin: 0 0 6px;
+}
+.brand-logo {
+  height: 42px;
+  width: auto;
+}
+
+/* Headings */
+h1 {
+  font-size: 17pt;
+  color: #1A1A1A;
+  border-bottom: 3px solid #FF6600;
+  padding-bottom: 8px;
+  margin-top: 4px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+h2 {
+  font-size: 15pt;
+  color: #1A1A1A;
+  border-left: 4px solid #FF6600;
+  padding-left: 10px;
+  margin-top: 28px;
+  margin-bottom: 10px;
+}
+
+h3 {
+  font-size: 12pt;
+  color: #FF6600;
+  margin-top: 18px;
+  margin-bottom: 6px;
+}
+
+h4 {
+  font-size: 11pt;
+  color: #4A4A4A;
+  margin-top: 12px;
+}
+
+/* Body text */
+p {
+  color: #1A1A1A;
+  margin-bottom: 10px;
+}
+
+/* Horizontal rules */
+hr {
+  border: none;
+  border-top: 2px solid #FF6600;
+  margin: 22px 0;
+  opacity: 0.3;
+}
+
+/* Blockquote / verdict callout — keep the verdict legible (not italic) on the
+   orange tint so the score/verdict line reads as a banner, not an aside. */
+blockquote {
+  border-left: 4px solid #FF6600;
+  background-color: #FFF3EB;
+  margin: 14px 0;
+  padding: 10px 16px;
+  border-radius: 0 4px 4px 0;
+  color: #1A1A1A;
+  font-size: 12pt;
+}
+
+/* Inline code */
+code {
+  background-color: #FFF3EB;
+  border: 1px solid #FFE0C8;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 9pt;
+  color: #CC5200;
+  word-break: break-all;
+}
+
+/* Code blocks */
+pre {
+  background-color: #F7F7F7;
+  border: 1px solid #DDDDDD;
+  border-left: 3px solid #FF6600;
+  border-radius: 0 4px 4px 0;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  word-break: break-all;
+  font-size: 9pt;
+  line-height: 1.45;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 10px 0;
+}
+
+pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #1A1A1A;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 10pt;
+}
+
+thead tr {
+  background-color: #C8C8C8;
+  color: #1A1A1A;
+}
+
+th {
+  padding: 9px 12px;
+  text-align: left;
+  font-weight: bold;
+  color: #1A1A1A;
+}
+
+td {
+  padding: 8px 12px;
+  border: 1px solid #DDDDDD;
+  color: #1A1A1A;
+}
+
+tr:nth-child(even) td {
+  background-color: #FFF3EB;
+}
+
+tr:nth-child(odd) td {
+  background-color: #FFFFFF;
+}
+
+/* Links */
+a {
+  color: #FF6600;
+  text-decoration: none;
+}
+
+/* Lists */
+ul, ol {
+  margin: 8px 0 12px 20px;
+  color: #1A1A1A;
+}
+
+li {
+  margin-bottom: 4px;
+}
+
+/* Italic footnotes/notes the report emits (thresholds, counts, generated-by). */
+em {
+  color: #6B6B6B;
+}
+
+/* Print: full-bleed, avoid awkward section/table splits. */
+@media print {
+  body { margin: 0; max-width: 100%; }
+  h2 { page-break-after: avoid; }
+  table { page-break-inside: avoid; }
+}
