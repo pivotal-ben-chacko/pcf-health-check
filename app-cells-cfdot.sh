@@ -1,35 +1,32 @@
 #!/usr/bin/env bash
 #
-# app-cells-cfdot.sh -- identify the Diego cells a list of apps reside on,
-#                       using only the bosh CLI + cfdot (no cf CLI).
+# app-cells-cfdot.sh -- identify the Diego cells a list of apps reside on.
+#
+# Runs DIRECTLY ON A DIEGO CELL VM. No bosh CLI, no cf CLI, no jq -- only
+# cfdot (present on every cell) and stock shell tools (awk/sed/grep).
 #
 # Usage:  ./app-cells-cfdot.sh <apps-file>
 #   apps-file: one app name per line (blank lines and '#' comments ignored).
 #              If the same app name exists in several orgs/spaces, every
 #              match is included (org/space shown to disambiguate).
 #
-# Designed to run on the opsman VM (same as pcf-health-check.sh). Read-only.
-#
 # How it works:
-#   1. One 'bosh ssh' to a Diego cell runs three cfdot queries in a login
-#      shell (cfdot is only on PATH in login shells):
-#        - desired-lrps : TAS stamps each LRP's metric_tags with app_name /
-#                         organization_name / space_name (the tags Loggregator
-#                         uses), so app names resolve from the BBS itself --
-#                         no CF API needed.
-#        - cells        : cell_id -> rep IP
-#        - actual-lrps  : process_guid + cell_id + state per app instance
-#   2. 'bosh vms' maps each rep IP back to the cell's BOSH instance name.
-#   3. Output is grouped per cell: each Diego cell is printed exactly once,
-#      with every listed app residing on it (and its instance count).
+#   - cfdot desired-lrps : TAS stamps each LRP's metric_tags with app_name /
+#                          organization_name / space_name (the tags
+#                          Loggregator uses), so app names resolve from the
+#                          BBS itself -- no CF API needed.
+#   - cfdot cells        : cell_id -> rep IP / zone
+#   - cfdot actual-lrps  : process_guid + cell_id + state per app instance
+#   Output is grouped per cell: each Diego cell is printed exactly once,
+#   with every listed app residing on it (and its instance count).
 #
-# Note: 'cfdot desired-lrps' returns full LRP definitions, so on a foundation
-# with thousands of apps the SSH transfer can take a while; it is still a
-# single round-trip.
+# Notes:
+#   - A stopped app has no desired LRP, so it reports as "not found" --
+#     correct for this tool, since a stopped app resides on no cell.
+#   - 'cfdot desired-lrps' returns full LRP definitions; on a foundation
+#     with thousands of apps the first query may take a little while.
 
 set -euo pipefail
-
-DIEGO_CELL_GROUPS_RE="${DIEGO_CELL_GROUPS_RE:-^(compute|diego_cell|isolated_diego_cell)}"
 
 APPS_FILE="${1:-}"
 if [[ -z "$APPS_FILE" || ! -r "$APPS_FILE" ]]; then
@@ -37,65 +34,75 @@ if [[ -z "$APPS_FILE" || ! -r "$APPS_FILE" ]]; then
   exit 2
 fi
 
-# Authenticate the bosh CLI the same way the health check does.
-[[ -z "${BOSH_ENVIRONMENT:-}" && -r "$HOME/env.sh" ]] && . "$HOME/env.sh" >/dev/null
-
-for c in bosh jq; do
-  command -v "$c" >/dev/null || { echo "ERROR: '$c' CLI not found on PATH" >&2; exit 2; }
-done
+# --- cfdot bootstrap: on a cell it's on PATH in login shells; otherwise the
+# --- cfdot job ships a setup script that exports the BBS endpoint + certs.
+if ! command -v cfdot >/dev/null 2>&1; then
+  [[ -r /var/vcap/jobs/cfdot/bin/setup ]] && . /var/vcap/jobs/cfdot/bin/setup 2>/dev/null || true
+  command -v cfdot >/dev/null 2>&1 || PATH="/var/vcap/packages/cfdot/bin:$PATH"
+fi
+command -v cfdot >/dev/null 2>&1 || {
+  echo "ERROR: cfdot not found -- is this a Diego cell VM? (try a login shell, or 'source /var/vcap/jobs/cfdot/bin/setup')" >&2
+  exit 2
+}
 
 # ---------------------------------------------------------------------------
 # 0. Read the requested app names.
 # ---------------------------------------------------------------------------
-APP_NAMES=()
+names_file="$(mktemp)"; tmp="$(mktemp)"
+trap 'rm -f "$names_file" "$tmp"' EXIT
+n_names=0
 while IFS= read -r app || [[ -n "$app" ]]; do
   app="${app#"${app%%[![:space:]]*}"}"; app="${app%"${app##*[![:space:]]}"}"
   [[ -z "$app" || "$app" == \#* ]] && continue
-  APP_NAMES+=("$app")
+  printf '%s\n' "$app" >>"$names_file"
+  n_names=$((n_names + 1))
 done <"$APPS_FILE"
-[[ ${#APP_NAMES[@]} -gt 0 ]] || { echo "ERROR: no app names in ${APPS_FILE}." >&2; exit 2; }
-names_json="$(printf '%s\n' "${APP_NAMES[@]}" | jq -R . | jq -s 'unique')"
+[[ $n_names -gt 0 ]] || { echo "ERROR: no app names in ${APPS_FILE}." >&2; exit 2; }
+sort -u "$names_file" -o "$names_file"
 
 # ---------------------------------------------------------------------------
-# 1. Find a Diego cell to SSH to, and build IP -> BOSH instance map.
+# 1. Query the BBS (all three are cluster-wide views; any one cell suffices).
 # ---------------------------------------------------------------------------
-echo "Locating a Diego cell and building the cell map from 'bosh vms'..." >&2
-declare -A INST_BY_IP
-cell_dep="" cell_grp=""
-while IFS=$'\t' read -r dep inst ips; do
-  for ip in ${ips//,/ }; do INST_BY_IP["$ip"]="$inst"; done
-  if [[ -z "$cell_grp" && "${inst%%/*}" =~ $DIEGO_CELL_GROUPS_RE ]]; then
-    cell_dep="$dep"; cell_grp="${inst%%/*}"
-  fi
-done < <(
-  bosh deployments --json 2>/dev/null | jq -r '.Tables[0].Rows[].name' \
-  | while read -r d; do
-      bosh -d "$d" vms --json 2>/dev/null \
-        | jq -r --arg d "$d" '.Tables[0].Rows[] | [$d, .instance, .ips] | @tsv'
-    done
-)
-[[ -n "$cell_grp" ]] || { echo "ERROR: no instance group matched /${DIEGO_CELL_GROUPS_RE}/." >&2; exit 2; }
+echo "Querying the Diego BBS via cfdot..." >&2
+desired="$(cfdot desired-lrps)"
+cells="$(cfdot cells)"
+lrps="$(cfdot actual-lrps)"
+[[ -n "$desired" ]] || { echo "ERROR: 'cfdot desired-lrps' returned nothing -- BBS unreachable?" >&2; exit 2; }
+
+# --- tiny JSON field pullers (cfdot emits one JSON object per line; the BBS
+# --- shapes are flat enough for anchored regex extraction -- no jq on cells).
+#   jstr:  "key":"value"            jtag: "key":{"static":"value"}  (metric_tags)
+#   jnum:  "key":123  (proto3 JSON omits zero values, so default is 0)
+AWK_LIB='
+function jstr(key,    re, s) {
+  re = "\"" key "\":\"[^\"]*\""
+  if (match($0, re)) { s = substr($0, RSTART, RLENGTH)
+                       sub("^\"" key "\":\"", "", s); sub(/"$/, "", s); return s }
+  return ""
+}
+function jtag(key,    re, s) {
+  re = "\"" key "\":\\{\"static\":\"[^\"]*\""
+  if (match($0, re)) { s = substr($0, RSTART, RLENGTH)
+                       sub(/^.*"static":"/, "", s); sub(/"$/, "", s); return s }
+  return jstr(key)
+}
+function jnum(key,    re, s) {
+  re = "\"" key "\":[0-9]+"
+  if (match($0, re)) { s = substr($0, RSTART, RLENGTH); sub(/^.*:/, "", s); return s }
+  return "0"
+}'
 
 # ---------------------------------------------------------------------------
-# 2. One login-shell SSH: desired LRPs + cell registry + actual LRPs.
-#    (Same invocation pattern as pcf-health-check.sh section 5.)
+# 2. cell_id -> "IP (zone)" from the cell registry.
 # ---------------------------------------------------------------------------
-echo "Querying the Diego BBS via ${cell_dep}/${cell_grp}/0 (cfdot)..." >&2
-raw="$(timeout 300 bosh -d "$cell_dep" ssh "${cell_grp}/0" \
-        -c 'bash -lc "echo @@DL; cfdot desired-lrps; echo @@CELLS; cfdot cells; echo @@LRP; cfdot actual-lrps"' 2>/dev/null \
-        | sed -e 's/\r$//' -e 's/^[^|]*stdout | //')"
-desired_json="$(awk '/^@@DL$/{f=1;next} /^@@CELLS$/{f=0} f' <<<"$raw" | grep '^{' || true)"
-cells_json="$(awk  '/^@@CELLS$/{f=1;next} /^@@LRP$/{f=0} f'  <<<"$raw" | grep '^{' || true)"
-lrp_json="$(awk    '/^@@LRP$/{f=1;next} f'                   <<<"$raw" | grep '^{' || true)"
-[[ -n "$desired_json" ]] || { echo "ERROR: could not retrieve desired-lrps from the BBS via cfdot." >&2; exit 2; }
-
-# cell_id -> BOSH instance (cfdot cells rep_address carries the cell IP)
-declare -A INST_BY_CELL_ID
-while IFS=$'\t' read -r cid addr; do
+declare -A IP_BY_CELL_ID ZONE_BY_CELL_ID
+while IFS=$'\t' read -r cid addr zone; do
   [[ -z "$cid" ]] && continue
   ip="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' <<<"$addr" | head -1 || true)"
-  INST_BY_CELL_ID["$cid"]="${INST_BY_IP[$ip]:-unknown (rep ${addr})}"
-done < <(jq -r '[.cell_id, (.rep_address // .rep_url // "")] | @tsv' <<<"$cells_json")
+  IP_BY_CELL_ID["$cid"]="${ip:-?}"
+  ZONE_BY_CELL_ID["$cid"]="${zone:-?}"
+done < <(awk "$AWK_LIB"'
+  /^\{/ { print jstr("cell_id") "\t" jstr("rep_address") "\t" jstr("zone") }' <<<"$cells")
 
 # ---------------------------------------------------------------------------
 # 3. Match requested names against desired-LRP metric tags.
@@ -104,30 +111,30 @@ done < <(jq -r '[.cell_id, (.rep_address // .rep_url // "")] | @tsv' <<<"$cells_
 declare -A PG_LABEL FOUND_NAME
 while IFS=$'\t' read -r pg an org space; do
   [[ -z "$pg" ]] && continue
-  PG_LABEL["$pg"]="${an} (${org}/${space})"
+  PG_LABEL["$pg"]="${an} (${org:-?}/${space:-?})"
   FOUND_NAME["$an"]=1
-done < <(jq -r --argjson N "$names_json" '
-    (.metric_tags.app_name.static       // .metric_tags.app_name       // "") as $an
-  | select($an != "" and ($N | index($an)))
-  | [.process_guid, $an,
-     (.metric_tags.organization_name.static // .metric_tags.organization_name // "?"),
-     (.metric_tags.space_name.static        // .metric_tags.space_name        // "?")]
-  | @tsv' <<<"$desired_json")
+done < <(awk "$AWK_LIB"'
+  NR == FNR { want[$0] = 1; next }                       # first file: app names
+  /^\{/ {
+    an = jtag("app_name")
+    if (an != "" && (an in want))
+      print jstr("process_guid") "\t" an "\t" jtag("organization_name") "\t" jtag("space_name")
+  }' "$names_file" <(printf '%s\n' "$desired"))
 
 missing=0
-for n in "${APP_NAMES[@]}"; do
+while IFS= read -r n; do
   if [[ -z "${FOUND_NAME[$n]:-}" ]]; then
     echo "WARN: app '$n' has no desired LRP in the BBS (not found, stopped, or has no instances)" >&2
     missing=$((missing + 1))
   fi
-done
+done <"$names_file"
 [[ ${#PG_LABEL[@]} -gt 0 ]] || { echo "ERROR: none of the listed apps were found in the BBS." >&2; exit 2; }
 
 # ---------------------------------------------------------------------------
 # 4. Walk the actual LRPs and group instances by Diego cell.
 # ---------------------------------------------------------------------------
 SEP=$'\x1f'
-declare -A CELL_TOTAL APPCELL CID_BY_CELL
+declare -A CELL_TOTAL APPCELL
 unplaced=""
 instances=0
 while IFS=$'\t' read -r pg idx state cid; do
@@ -135,34 +142,33 @@ while IFS=$'\t' read -r pg idx state cid; do
   label="${PG_LABEL[$pg]:-}"
   [[ -z "$label" ]] && continue
   instances=$((instances + 1))
-  if [[ -z "$cid" || "$cid" == "-" ]]; then
+  if [[ -z "$cid" ]]; then
     unplaced+="  ${label} #${idx}: ${state} (no cell)"$'\n'
     continue
   fi
-  cell="${INST_BY_CELL_ID[$cid]:-unknown}"
-  CID_BY_CELL["$cell"]="$cid"
-  CELL_TOTAL["$cell"]=$(( ${CELL_TOTAL[$cell]:-0} + 1 ))
-  APPCELL["${cell}${SEP}${label}"]=$(( ${APPCELL["${cell}${SEP}${label}"]:-0} + 1 ))
-done < <(jq -r '[.process_guid, (.index|tostring), .state,
-                 (.cell_id // "" | if . == "" then "-" else . end)] | @tsv' <<<"$lrp_json")
+  CELL_TOTAL["$cid"]=$(( ${CELL_TOTAL[$cid]:-0} + 1 ))
+  APPCELL["${cid}${SEP}${label}"]=$(( ${APPCELL["${cid}${SEP}${label}"]:-0} + 1 ))
+done < <(awk "$AWK_LIB"'
+  /^\{/ { print jstr("process_guid") "\t" jnum("index") "\t" jstr("state") "\t" jstr("cell_id") }' \
+  <<<"$lrps")
 
 # ---------------------------------------------------------------------------
 # 5. Report: one row per distinct Diego cell.
 # ---------------------------------------------------------------------------
-tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
-printf 'DIEGO_CELL\tCELL_ID\tINSTANCES\tAPPS\n' >"$tmp"
-while IFS= read -r cell; do
-  [[ -z "$cell" ]] && continue
+printf 'CELL_ID\tCELL_IP\tZONE\tINSTANCES\tAPPS\n' >"$tmp"
+while IFS= read -r cid; do
+  [[ -z "$cid" ]] && continue
   apps=""
   while IFS= read -r k; do
     label="${k#*"$SEP"}"
     apps+="${apps:+, }${label} x${APPCELL[$k]}"
-  done < <(printf '%s\n' "${!APPCELL[@]}" | grep -F "${cell}${SEP}" | sort)
-  printf '%s\t%s\t%s\t%s\n' "$cell" "${CID_BY_CELL[$cell]}" "${CELL_TOTAL[$cell]}" "$apps" >>"$tmp"
+  done < <(printf '%s\n' "${!APPCELL[@]}" | grep -F "${cid}${SEP}" | sort)
+  printf '%s\t%s\t%s\t%s\t%s\n' "$cid" "${IP_BY_CELL_ID[$cid]:-?}" \
+    "${ZONE_BY_CELL_ID[$cid]:-?}" "${CELL_TOTAL[$cid]}" "$apps" >>"$tmp"
 done < <(printf '%s\n' "${!CELL_TOTAL[@]}" | sort)
 
 echo
-column -t -s $'\t' "$tmp"
+if command -v column >/dev/null 2>&1; then column -t -s $'\t' "$tmp"; else cat "$tmp"; fi
 echo
 echo "Summary: ${instances} instance(s) of ${#PG_LABEL[@]} matched app(s) across ${#CELL_TOTAL[@]} distinct Diego cell(s)."
 if [[ -n "$unplaced" ]]; then
