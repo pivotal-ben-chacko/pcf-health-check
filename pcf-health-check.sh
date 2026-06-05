@@ -57,6 +57,16 @@ SCORE_CRIT_CAP=${SCORE_CRIT_CAP:-59}; SCORE_WARN_CAP=${SCORE_WARN_CAP:-84}
 # full install = "diego_cell" / "isolated_diego_cell*").
 DIEGO_CELL_GROUPS_RE='^(compute|diego_cell|isolated_diego_cell)'
 
+# Errand instance groups (BOSH lifecycle 'errand') are one-off jobs, not
+# long-running VMs. In a full/production foundation they appear in `bosh
+# instances` — typically not 'running' and often with no active VM — so the
+# per-VM checks would flag them as unhealthy/under-utilized, producing false
+# positives that drag the health score down. They are detected per-deployment
+# from the manifest and skipped by sections 2-5 and the section-7 ignore check.
+# EXTRA_EXCLUDE_GROUPS force-excludes additional instance groups by name
+# (space/comma-separated), regardless of lifecycle.
+EXTRA_EXCLUDE_GROUPS="${EXTRA_EXCLUDE_GROUPS:-}"
+
 # ---------------------------------------------------------------------------
 # Presentation helpers
 # ---------------------------------------------------------------------------
@@ -255,6 +265,32 @@ for d in "${DEPLOYMENTS[@]}"; do
   STEMCELLS_BY_DEP+="${d}"$'\t'"${stms:-none}"$'\n'
 done
 
+# Errand instance groups per deployment (lifecycle: errand in the manifest), plus
+# any names forced via EXTRA_EXCLUDE_GROUPS. The per-VM checks skip these so a
+# one-off errand instance never registers as a false failure or pulls the score
+# down. is_errand_ig <dep> <ig> is the membership test used throughout.
+declare -A ERRAND_BY_DEP
+_extra_excl="$(tr ', ' '\n\n' <<<"$EXTRA_EXCLUDE_GROUPS" | sed '/^$/d')"
+excl_note=""
+for d in "${DEPLOYMENTS[@]}"; do
+  igs="$(bosh -d "$d" manifest 2>/dev/null | awk '
+      /^instance_groups:/{f=1; next}
+      f && /^[A-Za-z]/{f=0}
+      f && /^- *name:/{n=$3; next}
+      f && /^[[:space:]]+lifecycle:[[:space:]]*errand([[:space:]]|$)/{print n}')"
+  igs="$(printf '%s\n%s\n' "$igs" "$_extra_excl" | sed '/^$/d' | sort -u)"
+  ERRAND_BY_DEP["$d"]="$igs"
+  [[ -n "$igs" ]] && excl_note+="${d}: $(paste -sd ', ' <<<"$igs"); "
+done
+if [[ -n "$excl_note" ]]; then
+  info "Excluding errand/non-VM instance groups from per-VM checks — ${excl_note%; }"
+else
+  info "No errand instance groups detected — all instance groups are long-running."
+fi
+
+# True when instance group $2 in deployment $1 is an errand (skip it in VM checks).
+is_errand_ig(){ local l="${ERRAND_BY_DEP[$1]:-}"; [[ -n "$l" ]] && grep -qxF "$2" <<<"$l"; }
+
 # Load vm_type -> cpu/ram(MB)/disk(MB) map from the cloud-config (allocated capacity).
 declare -A VT_CPU VT_RAM VT_DISK
 while IFS=$'\t' read -r name cpu ram disk; do
@@ -274,7 +310,11 @@ done < <(bosh cloud-config 2>/dev/null | awk '
 # ===========================================================================
 section "2. VM & Process Health"
 for d in "${DEPLOYMENTS[@]}"; do
-  rows="$(bosh --json -d "$d" instances --ps 2>/dev/null | jq -c '.Tables[0].Rows[]')"
+  rows="$(bosh --json -d "$d" instances --ps 2>/dev/null \
+            | jq -c --arg err "${ERRAND_BY_DEP[$d]:-}" '
+                ($err | split("\n") | map(select(length>0))) as $E
+                | .Tables[0].Rows[]
+                | select( (.instance | split("/")[0]) as $ig | ($E | index($ig) | not) )')"
   [[ -z "$rows" ]] && { warn "[$d] could not list instances."; continue; }
 
   # VM-level rows have an instance id + ips; process rows carry the process name.
@@ -333,7 +373,8 @@ _vm_chk(){ local v=$1 w=$2 cc=$3 lbl=$4 c
 for d in "${DEPLOYMENTS[@]}"; do
   while IFS=$'\t' read -r inst vmtype state mem eph per sys cu cs cw load; do
     [[ -z "$inst" ]] && continue
-    ig="${inst%%/*}"; short="${ig}/${inst##*/}"; short="${short:0:26}"
+    ig="${inst%%/*}"; is_errand_ig "$d" "$ig" && continue
+    short="${ig}/${inst##*/}"; short="${short:0:26}"
     cpu="$(awk -v a="${cu%\%}" -v b="${cs%\%}" -v c="${cw%\%}" 'BEGIN{printf "%.0f",a+b+c}')"
     mp=$(pct "$mem"); ep=$(pct "$eph"); pp=$(pct "$per"); sp=$(pct "$sys")
     l1="${load%%,*}"; gid="${inst##*/}"
@@ -365,7 +406,8 @@ printf '  %-22s %-12s   %18s   %18s   %10s\n' "INSTANCE" "VM_TYPE" "RAM used/all
 for d in "${DEPLOYMENTS[@]}"; do
   while IFS=$'\t' read -r inst vmtype mem eph; do
     [[ -z "$inst" ]] && continue
-    ig="${inst%%/*}"; short="${ig}/${inst##*/}"; short="${short:0:22}"
+    ig="${inst%%/*}"; is_errand_ig "$d" "$ig" && continue
+    short="${ig}/${inst##*/}"; short="${short:0:22}"
     alloc_ram="${VT_RAM[$vmtype]:-}"; alloc_disk="${VT_DISK[$vmtype]:-}"
     used_ram="$(paren_to_mb "$mem")"
     ep=$(pct "$eph"); used_disk=""
@@ -401,6 +443,7 @@ for d in "${DEPLOYMENTS[@]}"; do
   while IFS=$'\t' read -r inst vmtype mem load; do
     [[ -z "$inst" ]] && continue
     ig="${inst%%/*}"
+    is_errand_ig "$d" "$ig" && continue
     [[ "$ig" =~ $DIEGO_CELL_GROUPS_RE ]] || continue
     [[ -z "$first_cell_dep" ]] && { first_cell_dep="$d"; first_cell_grp="$ig"; }
     alloc_ram="${VT_RAM[$vmtype]:-0}"; alloc_cpu="${VT_CPU[$vmtype]:-?}"; alloc_disk="${VT_DISK[$vmtype]:-0}"
@@ -566,6 +609,7 @@ ign_total=0
 for d in "${DEPLOYMENTS[@]}"; do
   while IFS= read -r inst; do
     [[ -z "$inst" ]] && continue
+    is_errand_ig "$d" "${inst%%/*}" && continue
     ign_total=$((ign_total+1))
     crit "[$d] instance set to IGNORE: ${inst} — BOSH will skip it during the upgrade; run 'bosh -d ${d} unignore ${inst}' first."
   done < <(bosh --json -d "$d" instances --details 2>/dev/null \
@@ -703,7 +747,8 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf '| **Generated** | %s |\n' "$(date -u '+%Y-%m-%d %H:%M UTC')"
     printf '| **Run on** | `%s@%s` |\n' "$(whoami)" "$(hostname)"
     printf '| **Deployments** | %s |\n' "${DEPLOYMENTS[*]}"
-    stm_used="$(cut -f2 <<<"$STEMCELLS_BY_DEP" | tr ',' '\n' | sed 's/^ *//;s/ *$//;/^$/d' | sort -u | paste -sd ', ' -)"
+    # One stemcell per line in the cell (<br> = a line break once pandoc renders it).
+    stm_used="$(cut -f2 <<<"$STEMCELLS_BY_DEP" | tr ',' '\n' | sed 's/^ *//;s/ *$//;/^$/d' | sort -u | paste -sd $'\t' - | sed 's/\t/<br>/g')"
     printf '| **Stemcell(s) in use** | %s |\n' "${stm_used:-?}"
     printf '| **Checks (OK / Warn / Crit)** | %s / %s / %s |\n' "$OK_COUNT" "$WARN_COUNT" "$CRIT_COUNT"
     printf '| **Health score** | **%s%%** |\n\n' "$HEALTH_SCORE"
@@ -754,7 +799,7 @@ if [[ $MD_MODE -eq 1 ]]; then
       printf '\n**Stemcells in use:**\n\n| Deployment | Stemcell |\n|---|---|\n'
       while IFS=$'\t' read -r dep stm; do
         [[ -z "$dep" ]] && continue
-        printf '| %s | %s |\n' "$dep" "${stm:-none}"
+        printf '| %s | %s |\n' "$dep" "$(sed 's/, /<br>/g' <<<"${stm:-none}")"
       done <<<"$STEMCELLS_BY_DEP"
     fi
 

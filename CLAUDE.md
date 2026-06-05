@@ -93,6 +93,20 @@ which is expected, not a build failure (the script tolerates it).
   **full install** with dedicated component VMs. The script auto-detects deployments
   and vm_types, and its Diego-cell regex matches both `compute` and `diego_cell*`,
   so it is portable to the full install without edits.
+- **Errand instance groups are excluded from the per-VM checks.** A full/prod
+  foundation has `lifecycle: errand` instance groups (e.g. `bootstrap`,
+  `nfsbrokerpush`, `smoke_tests`) that show up in `bosh instances` as not-running
+  with no active VM; checking them produced false positives that dragged the
+  health score down. After gathering deployments the script reads each
+  deployment's manifest, collects instance groups with `lifecycle: errand`
+  (per-deployment, in `ERRAND_BY_DEP`), and `is_errand_ig <dep> <ig>` skips them
+  in sections 2–5 and the section-7 ignore check. It logs which groups were
+  excluded (or "No errand instance groups detected"). The lab is all
+  `lifecycle: service`, so this is a no-op there. `EXTRA_EXCLUDE_GROUPS` (env,
+  space/comma list) force-excludes additional groups by name regardless of
+  lifecycle. NOTE: errands that are *colocated* on a real instance group (most
+  TAS errands) run on a long-running VM and are correctly NOT excluded — only
+  standalone `lifecycle: errand` instance groups are.
 - Diego container allocation comes from `cfdot cell-states`, run over `bosh ssh`.
   `cfdot` is only on PATH in a **login** shell, so the script invokes it as
   `bosh -d <dep> ssh <cell>/0 -c 'bash -lc "cfdot cell-states"'` (a plain

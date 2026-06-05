@@ -187,7 +187,7 @@ table { page-break-inside: avoid; }
 <h1 id="pcf-fog-foundation-health-check">PCF FOG Foundation Health
 Check</h1>
 <blockquote>
-<p><strong>⚠️ Verdict: CAUTION</strong> — PROCEED WITH CAUTION — 2
+<p><strong>⚠️ Verdict: CAUTION</strong> — PROCEED WITH CAUTION — 4
 warning(s); review before upgrading.</p>
 <p><strong>Health score: 84%</strong></p>
 </blockquote>
@@ -204,7 +204,7 @@ warning(s); review before upgrading.</p>
 </tr>
 <tr>
 <td><strong>Generated</strong></td>
-<td>2026-06-04 12:38 UTC</td>
+<td>2026-06-05 04:42 UTC</td>
 </tr>
 <tr>
 <td><strong>Run on</strong></td>
@@ -212,7 +212,7 @@ warning(s); review before upgrading.</p>
 </tr>
 <tr>
 <td><strong>Deployments</strong></td>
-<td>cf-bfa9f18ae9bf61f7f155</td>
+<td>cf-6f11f8e43cd7b626077b</td>
 </tr>
 <tr>
 <td><strong>Stemcell(s) in use</strong></td>
@@ -220,7 +220,7 @@ warning(s); review before upgrading.</p>
 </tr>
 <tr>
 <td><strong>Checks (OK / Warn / Crit)</strong></td>
-<td>24 / 2 / 0</td>
+<td>54 / 4 / 0</td>
 </tr>
 <tr>
 <td><strong>Health score</strong></td>
@@ -241,8 +241,8 @@ warning(s); review before upgrading.</p>
 <tbody>
 <tr>
 <td>BOSH Director</td>
-<td style="text-align: right;">8</td>
-<td style="text-align: right;">0</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">2</td>
 <td style="text-align: right;">0</td>
 </tr>
 <tr>
@@ -253,20 +253,20 @@ warning(s); review before upgrading.</p>
 </tr>
 <tr>
 <td>VM Resource Utilization</td>
-<td style="text-align: right;">5</td>
+<td style="text-align: right;">20</td>
 <td style="text-align: right;">0</td>
 <td style="text-align: right;">0</td>
 </tr>
 <tr>
 <td>Allocated vs Utilized (per VM)</td>
-<td style="text-align: right;">5</td>
+<td style="text-align: right;">20</td>
 <td style="text-align: right;">0</td>
 <td style="text-align: right;">0</td>
 </tr>
 <tr>
 <td>Diego Cells</td>
-<td style="text-align: right;">0</td>
 <td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
 <td style="text-align: right;">0</td>
 </tr>
 <tr>
@@ -277,8 +277,8 @@ warning(s); review before upgrading.</p>
 </tr>
 <tr>
 <td>Upgrade Readiness</td>
-<td style="text-align: right;">3</td>
-<td style="text-align: right;">1</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">2</td>
 <td style="text-align: right;">0</td>
 </tr>
 <tr>
@@ -289,7 +289,7 @@ warning(s); review before upgrading.</p>
 </tr>
 <tr>
 <td>MySQL / Galera Cluster</td>
-<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
 <td style="text-align: right;">0</td>
 <td style="text-align: right;">0</td>
 </tr>
@@ -301,21 +301,33 @@ warning(s); review before upgrading.</p>
 vsphere_cpi)</li>
 <li>✅ No active deployment locks.</li>
 <li>✅ No in-flight BOSH tasks.</li>
-<li>✅ disk /var/vcap/store: 45% used</li>
+<li>⚠️ 8 of the last 25 BOSH tasks ended in ‘error’ (review with: bosh
+tasks –recent=25).</li>
+<li>⚠️ Director VM disk /var/vcap/store at 84% used.</li>
 <li>✅ disk /var/vcap/data: 11% used</li>
 <li>✅ disk /: 71% used</li>
-<li>✅ memory: 38% (2979/7937 MB)</li>
+<li>✅ memory: 36% (2868/7937 MB)</li>
 <li>✅ monit: all 23 director processes running</li>
 </ul>
-<p><em>Director VM: memory 38% (2979/7937 MB), load 0.08 over 2 vCPU, 23
+<p><em>Director VM: memory 36% (2868/7937 MB), load 0.05 over 2 vCPU, 23
 monit processes running.</em></p>
 <h2 id="vm-process-health">2. VM &amp; Process Health</h2>
 <ul>
-<li>✅ [cf-bfa9f18ae9bf61f7f155] all 5 VM(s) and their processes are
+<li>✅ [cf-6f11f8e43cd7b626077b] all 20 VM(s) and their processes are
 running.</li>
 </ul>
 <h2 id="vm-resource-utilization">3. VM Resource Utilization</h2>
 <table>
+<colgroup>
+<col style="width: 12%" />
+<col style="width: 12%" />
+<col style="width: 12%" />
+<col style="width: 12%" />
+<col style="width: 12%" />
+<col style="width: 12%" />
+<col style="width: 12%" />
+<col style="width: 12%" />
+</colgroup>
 <thead>
 <tr>
 <th>Instance</th>
@@ -330,68 +342,248 @@ running.</li>
 </thead>
 <tbody>
 <tr>
-<td>blobstore/dfcb4200</td>
-<td>medium</td>
-<td style="text-align: right;">1</td>
-<td style="text-align: right;">15</td>
-<td style="text-align: right;">9</td>
-<td style="text-align: right;">14</td>
-<td style="text-align: right;">59</td>
-<td style="text-align: right;">0.02</td>
-</tr>
-<tr>
-<td>compute/587be4c3</td>
-<td>xlarge.disk</td>
-<td style="text-align: right;">5</td>
-<td style="text-align: right;">19</td>
-<td style="text-align: right;">16</td>
+<td>clock_global/3586f01c</td>
+<td>medium.disk</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">23</td>
+<td style="text-align: right;">20</td>
 <td style="text-align: right;">–</td>
 <td style="text-align: right;">59</td>
-<td style="text-align: right;">0.87</td>
+<td style="text-align: right;">1.57</td>
 </tr>
 <tr>
-<td>control/0255a463</td>
-<td>2xlarge</td>
-<td style="text-align: right;">4</td>
-<td style="text-align: right;">36</td>
-<td style="text-align: right;">54</td>
-<td style="text-align: right;">–</td>
-<td style="text-align: right;">59</td>
-<td style="text-align: right;">0.41</td>
-</tr>
-<tr>
-<td>database/7e095dd2</td>
-<td>large</td>
-<td style="text-align: right;">4</td>
-<td style="text-align: right;">25</td>
-<td style="text-align: right;">19</td>
-<td style="text-align: right;">11</td>
-<td style="text-align: right;">59</td>
-<td style="text-align: right;">0.34</td>
-</tr>
-<tr>
-<td>router/c5e4e221</td>
-<td>medium</td>
+<td>cloud_controller/2d5c0972</td>
+<td>large.disk</td>
 <td style="text-align: right;">3</td>
-<td style="text-align: right;">15</td>
+<td style="text-align: right;">13</td>
+<td style="text-align: right;">23</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.10</td>
+</tr>
+<tr>
+<td>cloud_controller_worker/2bf613b3</td>
+<td>micro</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">52</td>
 <td style="text-align: right;">10</td>
 <td style="text-align: right;">–</td>
 <td style="text-align: right;">59</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>credhub/7034e814</td>
+<td>xlarge.mem</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>credhub/9a2b65b5</td>
+<td>xlarge.mem</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>diego_brain/cfbd72a0</td>
+<td>small</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">20</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
 <td style="text-align: right;">0.02</td>
+</tr>
+<tr>
+<td>diego_cell/05570c4e</td>
+<td>xlarge.mem</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">53</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.06</td>
+</tr>
+<tr>
+<td>diego_cell/dec53b4d</td>
+<td>xlarge.mem</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">53</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>diego_database/fabc1d18</td>
+<td>micro</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.01</td>
+</tr>
+<tr>
+<td>doppler/019cc7f8</td>
+<td>small</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">18</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>doppler/5ef30ac8</td>
+<td>small</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">20</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.08</td>
+</tr>
+<tr>
+<td>log_cache/92770e83</td>
+<td>medium.mem</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">11</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>loggregator_trafficcontroller/65b3eca0</td>
+<td>micro</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.16</td>
+</tr>
+<tr>
+<td>mysql/e1248e8c</td>
+<td>large.disk</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">18</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.20</td>
+</tr>
+<tr>
+<td>mysql_monitor/a8b65ffb</td>
+<td>micro</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">35</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>mysql_proxy/275dc026</td>
+<td>micro</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">35</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.02</td>
+</tr>
+<tr>
+<td>nats/4b5c7ff9</td>
+<td>micro</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.01</td>
+</tr>
+<tr>
+<td>nfs_server/009020af</td>
+<td>medium</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td>router/44fc382f</td>
+<td>micro.ram</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">39</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.03</td>
+</tr>
+<tr>
+<td>uaa/9d69a088</td>
+<td>medium.disk</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">27</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">–</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">0.26</td>
 </tr>
 </tbody>
 </table>
 <ul>
-<li>✅ [cf-bfa9f18ae9bf61f7f155] blobstore within thresholds (cpu 1% mem
-15% eph 9% per 14% sys 59%)</li>
-<li>✅ [cf-bfa9f18ae9bf61f7f155] compute within thresholds (cpu 5% mem
-19% eph 16% per –% sys 59%)</li>
-<li>✅ [cf-bfa9f18ae9bf61f7f155] control within thresholds (cpu 4% mem
-36% eph 54% per –% sys 59%)</li>
-<li>✅ [cf-bfa9f18ae9bf61f7f155] database within thresholds (cpu 4% mem
-25% eph 19% per 11% sys 59%)</li>
-<li>✅ [cf-bfa9f18ae9bf61f7f155] router within thresholds (cpu 3% mem
-15% eph 10% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] clock_global within thresholds (cpu 2%
+mem 23% eph 20% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] cloud_controller within thresholds (cpu
+3% mem 13% eph 23% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] cloud_controller_worker within
+thresholds (cpu 2% mem 52% eph 10% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] credhub within thresholds (cpu 1% mem
+3% eph 5% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] credhub within thresholds (cpu 1% mem
+4% eph 5% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] diego_brain within thresholds (cpu 2%
+mem 20% eph 8% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] diego_cell within thresholds (cpu 2%
+mem 3% eph 53% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] diego_cell within thresholds (cpu 2%
+mem 3% eph 53% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] diego_database within thresholds (cpu
+4% mem 40% eph 6% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] doppler within thresholds (cpu 4% mem
+18% eph 5% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] doppler within thresholds (cpu 6% mem
+20% eph 5% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] log_cache within thresholds (cpu 5% mem
+11% eph 7% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] loggregator_trafficcontroller within
+thresholds (cpu 2% mem 36% eph 4% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] mysql within thresholds (cpu 4% mem 18%
+eph 1% per 6% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] mysql_monitor within thresholds (cpu 2%
+mem 35% eph 3% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] mysql_proxy within thresholds (cpu 3%
+mem 35% eph 4% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] nats within thresholds (cpu 2% mem 36%
+eph 4% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] nfs_server within thresholds (cpu 1%
+mem 12% eph 6% per 10% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] router within thresholds (cpu 2% mem
+39% eph 4% per –% sys 59%)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] uaa within thresholds (cpu 4% mem 27%
+eph 3% per –% sys 59%)</li>
 </ul>
 <p><em>Thresholds — mem 85/95%, disk 80/90%, cpu 80/95%
 (WARN/CRIT).</em></p>
@@ -419,67 +611,232 @@ running.</li>
 </thead>
 <tbody>
 <tr>
-<td>blobstore/dfcb4200</td>
-<td>medium</td>
-<td style="text-align: right;">600 MB</td>
+<td>clock_global/3586f01c</td>
+<td>medium.disk</td>
+<td style="text-align: right;">915 MB</td>
 <td style="text-align: right;">4.0 GB</td>
-<td style="text-align: right;">737 MB</td>
-<td style="text-align: right;">8.0 GB</td>
-<td style="text-align: right;">15%</td>
+<td style="text-align: right;">6.4 GB</td>
+<td style="text-align: right;">32.0 GB</td>
+<td style="text-align: right;">22%</td>
 </tr>
 <tr>
-<td>compute/587be4c3</td>
-<td>xlarge.disk</td>
-<td style="text-align: right;">3.0 GB</td>
-<td style="text-align: right;">16.0 GB</td>
-<td style="text-align: right;">20.5 GB</td>
-<td style="text-align: right;">128.0 GB</td>
+<td>cloud_controller/2d5c0972</td>
+<td>large.disk</td>
+<td style="text-align: right;">1.1 GB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">14.7 GB</td>
+<td style="text-align: right;">64.0 GB</td>
+<td style="text-align: right;">14%</td>
+</tr>
+<tr>
+<td>cloud_controller_worker/2bf613b3</td>
+<td>micro</td>
+<td style="text-align: right;">506 MB</td>
+<td style="text-align: right;">1.0 GB</td>
+<td style="text-align: right;">819 MB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">49%</td>
+</tr>
+<tr>
+<td>credhub/7034e814</td>
+<td>xlarge.mem</td>
+<td style="text-align: right;">1.1 GB</td>
+<td style="text-align: right;">32.0 GB</td>
+<td style="text-align: right;">1.6 GB</td>
+<td style="text-align: right;">32.0 GB</td>
+<td style="text-align: right;">3%</td>
+</tr>
+<tr>
+<td>credhub/9a2b65b5</td>
+<td>xlarge.mem</td>
+<td style="text-align: right;">1.2 GB</td>
+<td style="text-align: right;">32.0 GB</td>
+<td style="text-align: right;">1.6 GB</td>
+<td style="text-align: right;">32.0 GB</td>
+<td style="text-align: right;">4%</td>
+</tr>
+<tr>
+<td>diego_brain/cfbd72a0</td>
+<td>small</td>
+<td style="text-align: right;">393 MB</td>
+<td style="text-align: right;">2.0 GB</td>
+<td style="text-align: right;">655 MB</td>
+<td style="text-align: right;">8.0 GB</td>
 <td style="text-align: right;">19%</td>
 </tr>
 <tr>
-<td>control/0255a463</td>
-<td>2xlarge</td>
-<td style="text-align: right;">12.0 GB</td>
+<td>diego_cell/05570c4e</td>
+<td>xlarge.mem</td>
+<td style="text-align: right;">990 MB</td>
 <td style="text-align: right;">32.0 GB</td>
-<td style="text-align: right;">34.6 GB</td>
-<td style="text-align: right;">64.0 GB</td>
+<td style="text-align: right;">17.0 GB</td>
+<td style="text-align: right;">32.0 GB</td>
+<td style="text-align: right;">3%</td>
+</tr>
+<tr>
+<td>diego_cell/dec53b4d</td>
+<td>xlarge.mem</td>
+<td style="text-align: right;">997 MB</td>
+<td style="text-align: right;">32.0 GB</td>
+<td style="text-align: right;">17.0 GB</td>
+<td style="text-align: right;">32.0 GB</td>
+<td style="text-align: right;">3%</td>
+</tr>
+<tr>
+<td>diego_database/fabc1d18</td>
+<td>micro</td>
+<td style="text-align: right;">392 MB</td>
+<td style="text-align: right;">1.0 GB</td>
+<td style="text-align: right;">492 MB</td>
+<td style="text-align: right;">8.0 GB</td>
 <td style="text-align: right;">38%</td>
 </tr>
 <tr>
-<td>database/7e095dd2</td>
-<td>large</td>
+<td>doppler/019cc7f8</td>
+<td>small</td>
+<td style="text-align: right;">368 MB</td>
 <td style="text-align: right;">2.0 GB</td>
+<td style="text-align: right;">410 MB</td>
 <td style="text-align: right;">8.0 GB</td>
-<td style="text-align: right;">3.0 GB</td>
-<td style="text-align: right;">16.0 GB</td>
-<td style="text-align: right;">25%</td>
+<td style="text-align: right;">18%</td>
 </tr>
 <tr>
-<td>router/c5e4e221</td>
-<td>medium</td>
-<td style="text-align: right;">589 MB</td>
-<td style="text-align: right;">4.0 GB</td>
-<td style="text-align: right;">819 MB</td>
+<td>doppler/5ef30ac8</td>
+<td>small</td>
+<td style="text-align: right;">402 MB</td>
+<td style="text-align: right;">2.0 GB</td>
+<td style="text-align: right;">410 MB</td>
 <td style="text-align: right;">8.0 GB</td>
-<td style="text-align: right;">14%</td>
+<td style="text-align: right;">20%</td>
+</tr>
+<tr>
+<td>log_cache/92770e83</td>
+<td>medium.mem</td>
+<td style="text-align: right;">890 MB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">573 MB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">11%</td>
+</tr>
+<tr>
+<td>loggregator_trafficcontroller/65b3eca0</td>
+<td>micro</td>
+<td style="text-align: right;">354 MB</td>
+<td style="text-align: right;">1.0 GB</td>
+<td style="text-align: right;">328 MB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">35%</td>
+</tr>
+<tr>
+<td>mysql/e1248e8c</td>
+<td>large.disk</td>
+<td style="text-align: right;">1.4 GB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">655 MB</td>
+<td style="text-align: right;">64.0 GB</td>
+<td style="text-align: right;">18%</td>
+</tr>
+<tr>
+<td>mysql_monitor/a8b65ffb</td>
+<td>micro</td>
+<td style="text-align: right;">342 MB</td>
+<td style="text-align: right;">1.0 GB</td>
+<td style="text-align: right;">246 MB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">33%</td>
+</tr>
+<tr>
+<td>mysql_proxy/275dc026</td>
+<td>micro</td>
+<td style="text-align: right;">343 MB</td>
+<td style="text-align: right;">1.0 GB</td>
+<td style="text-align: right;">328 MB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">33%</td>
+</tr>
+<tr>
+<td>nats/4b5c7ff9</td>
+<td>micro</td>
+<td style="text-align: right;">354 MB</td>
+<td style="text-align: right;">1.0 GB</td>
+<td style="text-align: right;">328 MB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">35%</td>
+</tr>
+<tr>
+<td>nfs_server/009020af</td>
+<td>medium</td>
+<td style="text-align: right;">480 MB</td>
+<td style="text-align: right;">4.0 GB</td>
+<td style="text-align: right;">492 MB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">12%</td>
+</tr>
+<tr>
+<td>router/44fc382f</td>
+<td>micro.ram</td>
+<td style="text-align: right;">380 MB</td>
+<td style="text-align: right;">1.0 GB</td>
+<td style="text-align: right;">328 MB</td>
+<td style="text-align: right;">8.0 GB</td>
+<td style="text-align: right;">37%</td>
+</tr>
+<tr>
+<td>uaa/9d69a088</td>
+<td>medium.disk</td>
+<td style="text-align: right;">1.1 GB</td>
+<td style="text-align: right;">4.0 GB</td>
+<td style="text-align: right;">983 MB</td>
+<td style="text-align: right;">32.0 GB</td>
+<td style="text-align: right;">27%</td>
 </tr>
 </tbody>
 </table>
 <ul>
-<li>✅ [cf-bfa9f18ae9bf61f7f155] blobstore RAM allocation 15% used (600
+<li>✅ [cf-6f11f8e43cd7b626077b] clock_global RAM allocation 22% used
+(915 MB of 4.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] cloud_controller RAM allocation 14%
+used (1.1 GB of 8.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] cloud_controller_worker RAM allocation
+49% used (506 MB of 1.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] credhub RAM allocation 3% used (1.1 GB
+of 32.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] credhub RAM allocation 4% used (1.2 GB
+of 32.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] diego_brain RAM allocation 19% used
+(393 MB of 2.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] diego_cell RAM allocation 3% used (990
+MB of 32.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] diego_cell RAM allocation 3% used (997
+MB of 32.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] diego_database RAM allocation 38% used
+(392 MB of 1.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] doppler RAM allocation 18% used (368 MB
+of 2.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] doppler RAM allocation 20% used (402 MB
+of 2.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] log_cache RAM allocation 11% used (890
+MB of 8.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] loggregator_trafficcontroller RAM
+allocation 35% used (354 MB of 1.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] mysql RAM allocation 18% used (1.4 GB
+of 8.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] mysql_monitor RAM allocation 33% used
+(342 MB of 1.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] mysql_proxy RAM allocation 33% used
+(343 MB of 1.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] nats RAM allocation 35% used (354 MB of
+1.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] nfs_server RAM allocation 12% used (480
 MB of 4.0 GB)</li>
-<li>✅ [cf-bfa9f18ae9bf61f7f155] compute RAM allocation 19% used (3.0 GB
-of 16.0 GB)</li>
-<li>✅ [cf-bfa9f18ae9bf61f7f155] control RAM allocation 38% used (12.0
-GB of 32.0 GB)</li>
-<li>✅ [cf-bfa9f18ae9bf61f7f155] database RAM allocation 25% used (2.0
-GB of 8.0 GB)</li>
-<li>✅ [cf-bfa9f18ae9bf61f7f155] router RAM allocation 14% used (589 MB
-of 4.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] router RAM allocation 37% used (380 MB
+of 1.0 GB)</li>
+<li>✅ [cf-6f11f8e43cd7b626077b] uaa RAM allocation 27% used (1.1 GB of
+4.0 GB)</li>
 </ul>
 <h2 id="diego-cells">5. Diego Cells</h2>
-<p><strong>Cells:</strong> 1 · reserved/capacity 9.1 GB / 15.6 GB (58%)
-· available 6.5 GB · LRPs: RUNNING=17</p>
+<p><strong>Cells:</strong> 2 · reserved/capacity 0 MB / 62.7 GB (0%) ·
+available 62.7 GB · LRPs: n/a</p>
 <table>
 <thead>
 <tr>
@@ -493,33 +850,42 @@ of 4.0 GB)</li>
 </thead>
 <tbody>
 <tr>
-<td>587be4c3</td>
-<td style="text-align: right;">9.1 GB</td>
-<td style="text-align: right;">15.6 GB</td>
-<td style="text-align: right;">6.5 GB</td>
-<td style="text-align: right;">17/249</td>
-<td style="text-align: right;">58%</td>
+<td>05570c4e</td>
+<td style="text-align: right;">0 MB</td>
+<td style="text-align: right;">31.3 GB</td>
+<td style="text-align: right;">31.3 GB</td>
+<td style="text-align: right;">0/249</td>
+<td style="text-align: right;">0%</td>
+</tr>
+<tr>
+<td>dec53b4d</td>
+<td style="text-align: right;">0 MB</td>
+<td style="text-align: right;">31.3 GB</td>
+<td style="text-align: right;">31.3 GB</td>
+<td style="text-align: right;">0/249</td>
+<td style="text-align: right;">0%</td>
 </tr>
 </tbody>
 </table>
 <ul>
-<li>⚠️ Only 1 Diego cell — no peer to evacuate to, so apps WILL restart
-when it is recreated (expected for single-cell/small-footprint; schedule
-a maintenance window).</li>
+<li>✅ Available 62.7 GB &gt;= largest cell 31.3 GB — a cell can be
+drained during a rolling upgrade without exhausting placement
+capacity.</li>
 </ul>
 <h2 id="cloud-foundry-api">6. Cloud Foundry API</h2>
 <ul>
-<li>✅ CF API reachable: https://api.system.skynetsystems.io (v3.207.0)
+<li>✅ CF API reachable: https://api.system.skynetsystems.io (v3.160.0)
 as admin</li>
 </ul>
-<p><em>Orgs: 1 · Spaces: 6 · Apps: 12.</em></p>
+<p><em>Orgs: 1 · Spaces: 0 · Apps: 0.</em></p>
 <h2 id="upgrade-readiness">7. Upgrade Readiness</h2>
 <ul>
-<li>⚠️ Staged change: Small Footprint VMware Tanzu Application Service
-[cf] — DELETE (currently v6.0.23) (deployment
-‘cf-bfa9f18ae9bf61f7f155’). Apply or revert before upgrading.</li>
+<li>⚠️ Staged change: VMware Tanzu Application Service [cf] — update
+v6.0.0 → v6.0.0 (deployment ‘cf-6f11f8e43cd7b626077b’) · 12 errand(s)
+will run. Apply or revert before upgrading.</li>
 <li>✅ Stemcells consistent: ubuntu-jammy/1.1193*</li>
-<li>✅ No orphaned persistent disks.</li>
+<li>⚠️ 2 orphaned persistent disk(s) — review with ‘bosh disks
+–orphaned’ / ‘bosh clean-up’.</li>
 <li>✅ No ignored instances — every VM will be updated during the
 upgrade.</li>
 </ul>
@@ -537,7 +903,7 @@ upgrade.</li>
 </thead>
 <tbody>
 <tr>
-<td>cf-bfa9f18ae9bf61f7f155</td>
+<td>cf-6f11f8e43cd7b626077b</td>
 <td>bosh-vsphere-esxi-ubuntu-jammy-go_agent/1.1193</td>
 </tr>
 </tbody>
@@ -547,6 +913,10 @@ upgrade.</li>
 <li>✅ No certificates expiring within 1m.</li>
 </ul>
 <h2 id="mysql-galera-cluster">9. MySQL / Galera Cluster</h2>
+<ul>
+<li>✅ mysql-diag: Galera cluster healthy on mysql_monitor (0 node(s)
+reported Synced).</li>
+</ul>
 <hr />
 <p><em>Generated by pcf-health-check.sh — read-only pre-upgrade health
 check.</em></p>
