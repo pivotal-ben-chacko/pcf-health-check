@@ -171,6 +171,11 @@ echo
 if command -v column >/dev/null 2>&1; then column -t -s $'\t' "$tmp"; else cat "$tmp"; fi
 echo
 echo "Summary: ${instances} instance(s) of ${#PG_LABEL[@]} matched app(s) across ${#CELL_TOTAL[@]} distinct Diego cell(s)."
+echo "Distinct Diego cells:"
+while IFS= read -r cid; do
+  [[ -z "$cid" ]] && continue
+  printf '  %s (%s)\n' "$cid" "${IP_BY_CELL_ID[$cid]:-?}"
+done < <(printf '%s\n' "${!CELL_TOTAL[@]}" | sort)
 if [[ -n "$unplaced" ]]; then
   echo "Instances not currently placed on any cell:"
   printf '%s' "$unplaced"
