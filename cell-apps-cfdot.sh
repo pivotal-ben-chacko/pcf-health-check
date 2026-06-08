@@ -164,7 +164,9 @@ done < <(awk -v org="$ORG" "$AWK_LIB"'
 declare -A CELL_COUNT APP_SEL_COUNT
 instances=0 cells_used=0 n_apps_sel=0
 while IFS=$'\t' read -r pg idx state cid; do
-  [[ -z "$pg" || -z "${PG_LABEL[$pg]:-}" || -z "${SELECTED[$cid]:-}" ]] && continue
+  # cid is empty for UNCLAIMED/CRASHED instances (placed on no cell) -- skip
+  # them BEFORE subscripting, or bash throws "bad array subscript".
+  [[ -z "$pg" || -z "$cid" || -z "${PG_LABEL[$pg]:-}" || -z "${SELECTED[$cid]:-}" ]] && continue
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$cid" "${PG_LABEL[$pg]}" "$idx" "$state" "${PG_TOTAL[$pg]}" "$pg" >>"$rows"
   [[ -z "${CELL_COUNT[$cid]:-}" ]] && cells_used=$((cells_used + 1))
