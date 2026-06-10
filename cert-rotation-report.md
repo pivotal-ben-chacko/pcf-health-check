@@ -1,7 +1,7 @@
 # PCF lab Certificate Rotation Estimate
 
 - **Director:** `192.168.2.2`
-- **Generated:** 2026-06-10 11:12:17 UTC
+- **Generated:** 2026-06-10 11:19:48 UTC
 - **Horizon:** all certificates (no expiry limit)
 - **Topology source:** `maestro tp`
 - **Update rules:** `bosh manifest` (per-IG max_in_flight/canaries)
@@ -40,7 +40,7 @@
 </tbody>
 </table>
 
-## Leaf certificates (1-phase)
+## Leaf certificates
 
 | Deployment | Leaf certs | Apply |
 |---|---:|---|

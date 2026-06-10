@@ -717,7 +717,7 @@ if [[ $MD_MODE -eq 1 ]]; then
     fi
 
     if [[ $N_LEAF -gt 0 ]]; then
-      printf '## Leaf certificates (1-phase)\n\n'
+      printf '## Leaf certificates\n\n'
       _leafapply="$([[ "${leaf_absorbed:-0}" -eq 1 ]] && echo 'folded into shared apply #2' || echo '1× (leaf campaign)')"
       printf '| Deployment | Leaf certs | Apply |\n|---|---:|---|\n'
       for dep in "${!LEAF_BY_DEP[@]}"; do
