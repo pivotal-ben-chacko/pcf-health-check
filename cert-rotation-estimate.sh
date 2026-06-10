@@ -1,0 +1,502 @@
+#!/usr/bin/env bash
+#
+# cert-rotation-estimate.sh — find expiring certificates on a TAS/PCF foundation
+# and estimate how long a certificate rotation will take.
+#
+# Run this ON the Operations Manager VM (it needs the om + bosh CLIs and the
+# credentials exported by env.sh, exactly like pcf-health-check.sh):
+#
+#     ssh ubuntu@<opsman-ip>
+#     ./cert-rotation-estimate.sh                # human output (colored)
+#     ./cert-rotation-estimate.sh --no-color     # plain text for logs
+#     ./cert-rotation-estimate.sh --json         # machine-readable summary
+#     ./cert-rotation-estimate.sh --window 90d   # plan for certs expiring <=90d
+#
+# It is strictly READ-ONLY — it only reads cert metadata and VM counts; it never
+# rotates anything or touches the foundation.
+#
+# ---------------------------------------------------------------------------
+# Why the estimate is shaped the way it is
+# ---------------------------------------------------------------------------
+# A cert rotation costs one or more Ops Manager "Apply Changes" runs, and an
+# Apply Changes is dominated by how many VMs BOSH has to recreate/restart:
+#
+#   * LEAF certificate (e.g. a router TLS cert, a UAA SAML cert): regenerate it
+#     and run Apply Changes ONCE. Only the owning product's VMs are touched.
+#
+#   * CA certificate (the Ops Manager root CA, the CF "services TLS CA"): the
+#     trust anchor lives on EVERY VM, so rotation is the standard three-phase
+#     dance, each phase a separate, FOUNDATION-WIDE Apply Changes:
+#         1. add the NEW CA   -> every VM now trusts old + new
+#         2. regenerate leaf certs off the new CA / activate it
+#         3. remove the OLD CA -> every VM trusts only the new
+#
+#   Not every CA is foundation-wide in all three phases, though:
+#     * FOUNDATION CA (Ops Manager root CA, BOSH DNS CA, director NATS CA): the
+#       trust anchor is on every VM, so ALL 3 phases are foundation-wide.
+#     * TRUSTED-CERTS CA (the CF "services TLS CA"): the CA is distributed via the
+#       BOSH director's *trusted certificates*, which propagate to every managed
+#       VM — so phase 1 (add new CA to trusted certs) and phase 3 (remove old CA)
+#       are FOUNDATION-WIDE, while phase 2 (regenerate the service leaf certs) only
+#       touches the OWNING deployment. => 2 foundation applies + 1 scoped apply.
+#     * DEPLOYMENT CA (e.g. a per-tile intermediate CA): all 3 phases hit only the
+#       owning deployment.
+#
+# The per-VM cost is not uniform either: database/Galera nodes drain + resync (SST)
+# and must roll serially, so they are costed higher (MIN_PER_VM_DB_*) than stateless
+# VMs, per instance group. So the time model is:
+#     apply_minutes(scope) = APPLY_OVERHEAD_MIN
+#         + Σ over instance groups in scope: ceil(group_vms / in_flight) * rate
+#       where rate / in_flight is the DB pair for database groups, else the default.
+#     total = leaf_applies * apply_minutes(leaf deployments)
+#           + Σ over CAs: fnd_phases*apply_minutes(foundation) + dep_phases*apply_minutes(owning dep)
+# reported as a low–high range (MIN_PER_VM[_DB]_LOW/HIGH bound the per-VM cost).
+#
+# Tools: this uses `om` (already authenticated by env.sh). The same cert
+# inventory is available from Broadcom's `maestro` CLI; swap the om curl calls
+# for the equivalent maestro cert commands if you standardize on it.
+
+set -uo pipefail
+
+# ---------------------------------------------------------------------------
+# Tunables (override via env). Times are in minutes.
+# ---------------------------------------------------------------------------
+# Planning horizon: certs expiring within this are candidates for rotation.
+# Ops Manager 'expires_within' syntax — Nd / Nw / Nm / Ny (e.g. 90d, 1m, 1y).
+ROTATE_WINDOW=${ROTATE_WINDOW:-1y}
+# Severity windows inside the planning horizon.
+CERT_CRIT_WINDOW=${CERT_CRIT_WINDOW:-1w}
+CERT_WARN_WINDOW=${CERT_WARN_WINDOW:-1m}
+
+# Records are \x1f-delimited (a non IFS-whitespace byte, so empty fields survive
+# `read` — see the section-2 note). Defined here because section 1 uses it too.
+SEP=$'\x1f'
+
+# Apply Changes cost model. Stateless VMs use MIN_PER_VM_*; database/Galera nodes
+# drain + resync (SST) and roll serially, so they cost more (MIN_PER_VM_DB_*).
+MIN_PER_VM_LOW=${MIN_PER_VM_LOW:-4}        # fast stateless VM update
+MIN_PER_VM_HIGH=${MIN_PER_VM_HIGH:-10}     # slow stateless VM update (drain + post-start)
+MAX_IN_FLIGHT=${MAX_IN_FLIGHT:-1}          # stateless VMs updated in parallel per Apply
+MIN_PER_VM_DB_LOW=${MIN_PER_VM_DB_LOW:-10} # DB node: drain + IST resync
+MIN_PER_VM_DB_HIGH=${MIN_PER_VM_DB_HIGH:-20} # DB node: drain + full SST resync
+DB_MAX_IN_FLIGHT=${DB_MAX_IN_FLIGHT:-1}    # clustered DBs MUST roll serially (quorum)
+APPLY_OVERHEAD_MIN=${APPLY_OVERHEAD_MIN:-20}   # staging/compile/migrations per Apply
+# Instance groups costed at the DB rate (matched on the BOSH instance-group name).
+DB_GROUPS_RE=${DB_GROUPS_RE:-'(mysql|database|galera|pxc|postgres|pgsql|rds|cockroach|^db[-_])'}
+
+# Apply Changes counts per rotation kind.
+CA_APPLY_COUNT=${CA_APPLY_COUNT:-3}        # FOUNDATION CA: 3 foundation-wide applies
+LEAF_APPLY_COUNT=${LEAF_APPLY_COUNT:-1}    # leaf rotation: regenerate -> 1 apply
+# TRUSTED-CERTS CA (services TLS CA): apply 1 ADDS the new CA to BOSH trusted certs
+# (foundation-wide), apply 2 regenerates the service leaf certs (owning deployment
+# only), apply 3 REMOVES the old CA from BOSH trusted certs (foundation-wide again).
+SERVICES_CA_FND_APPLIES=${SERVICES_CA_FND_APPLIES:-2}   # the add + the remove
+SERVICES_CA_DEP_APPLIES=${SERVICES_CA_DEP_APPLIES:-1}   # the leaf regeneration
+DEP_CA_APPLIES=${DEP_CA_APPLIES:-3}        # DEPLOYMENT-scoped CA: 3 applies on its dep
+
+# Batch all CA rotations into one campaign (1, default — the foundation-wide
+# add/remove applies are shared across every CA) or cost each CA separately (0).
+CA_BATCH=${CA_BATCH:-1}
+
+# --- CA classification -----------------------------------------------------
+# The deployed-certificates API names the rotation procedure per cert; a procedure
+# matching CA_PROCEDURE_RE ("Standard CA Procedure", "Services TLS CA Procedure")
+# is the 3-Apply CA dance. Leaf/SAML procedures take the 1-Apply path.
+CA_PROCEDURE_RE=${CA_PROCEDURE_RE:-'CA Procedure'}
+# Fallback CA detection on the label, for a cert with is_ca=true but no procedure.
+CA_ROTATION_3X_RE=${CA_ROTATION_3X_RE:-'(root_ca|services.?tls.?ca|/tls_ca|trusted_certs|_ca$)'}
+# Which scope model a CA takes. TRUSTED-CERTS (services TLS CA) is checked FIRST so
+# it wins over the broad foundation pattern. FOUNDATION is the genuine all-VM trust
+# anchors only; everything else falls through to DEPLOYMENT-scoped (owning product).
+CA_TRUSTED_CERTS_RE=${CA_TRUSTED_CERTS_RE:-'(services.?tls.?ca|/services/tls_ca|Services TLS CA)'}
+CA_FOUNDATION_RE=${CA_FOUNDATION_RE:-'(properties\.root_ca|properties\.nats_client_ca|bosh_dns/tls_ca|/opsmgr/.*tls_ca)'}
+
+# ---------------------------------------------------------------------------
+# Presentation
+# ---------------------------------------------------------------------------
+NO_COLOR=0; JSON_MODE=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-color) NO_COLOR=1;;
+    --json) JSON_MODE=1; NO_COLOR=1;;
+    --window) shift; ROTATE_WINDOW="${1:-$ROTATE_WINDOW}";;
+    --window=*) ROTATE_WINDOW="${1#*=}";;
+    -h|--help) sed -n '2,20p' "$0"; exit 0;;
+  esac
+  shift
+done
+if [[ -t 1 && $NO_COLOR -eq 0 ]]; then
+  R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; B=$'\e[34m'; BOLD=$'\e[1m'; RST=$'\e[0m'
+else
+  R=""; G=""; Y=""; B=""; BOLD=""; RST=""
+fi
+# In --json mode hide human output, keep real stdout on fd 3 for the JSON doc.
+if [[ $JSON_MODE -eq 1 ]]; then exec 3>&1 1>/dev/null; fi
+
+section(){ printf '\n%s%s== %s ==%s\n' "$BOLD" "$B" "$1" "$RST"; }
+ok(){   printf '  %s[ OK ]%s %s\n' "$G" "$RST" "$1"; }
+info(){ printf '  %s[INFO]%s %s\n' "$B" "$RST" "$1"; }
+warn(){ printf '  %s[WARN]%s %s\n' "$Y" "$RST" "$1"; }
+crit(){ printf '  %s[CRIT]%s %s\n' "$R" "$RST" "$1"; }
+die(){  printf '\n%s[FATAL]%s %s\n' "$R" "$RST" "$1" >&2; exit 2; }
+
+# minutes -> "2h 35m" (or "45m")
+fmt_min(){ awk -v m="$1" 'BEGIN{ m=int(m+0.5); h=int(m/60); r=m%60;
+  if(h>0) printf "%dh %02dm", h, r; else printf "%dm", r }'; }
+# Minutes for ONE Apply Changes over the given deployments, costed per instance
+# group: DB groups roll serially at the DB rate, everything else at the stateless
+# rate. `which` selects the low or high per-VM cost. IG_VMS/IG_ISDB come from §1.
+scope_minutes(){ # which(low|high)  dep1 [dep2 ...]
+  local which=$1; shift
+  local nrate drate
+  if [[ "$which" == high ]]; then nrate=$MIN_PER_VM_HIGH; drate=$MIN_PER_VM_DB_HIGH
+  else nrate=$MIN_PER_VM_LOW; drate=$MIN_PER_VM_DB_LOW; fi
+  local total=0 d key cnt isdb rate mif
+  for d in "$@"; do
+    for key in "${!IG_VMS[@]}"; do
+      [[ "$key" == "${d}${SEP}"* ]] || continue
+      cnt="${IG_VMS[$key]}"; isdb="${IG_ISDB[$key]:-0}"
+      if [[ "$isdb" == "1" ]]; then rate=$drate; mif=$DB_MAX_IN_FLIGHT; else rate=$nrate; mif=$MAX_IN_FLIGHT; fi
+      total="$(awk -v t="$total" -v c="$cnt" -v m="$mif" -v r="$rate" \
+        'BEGIN{ m=(m<1?1:m); printf "%.4f", t + int((c+m-1)/m)*r }')"
+    done
+  done
+  awk -v t="$total" -v ov="$APPLY_OVERHEAD_MIN" 'BEGIN{ printf "%.1f", ov + t }'
+}
+# n * a single-apply cost.
+napply(){ awk -v n="$1" -v p="$2" 'BEGIN{ printf "%.1f", n*p }'; }
+
+# ---------------------------------------------------------------------------
+# Environment bootstrap — reuse env.sh just like pcf-health-check.sh.
+# ---------------------------------------------------------------------------
+if [[ -z "${BOSH_ENVIRONMENT:-}" ]]; then
+  for f in "$(dirname "$0")/env.sh" "$HOME/env.sh" "./env.sh"; do
+    [[ -f "$f" ]] && { info "Sourcing $f"; source "$f" >/dev/null 2>&1; break; }
+  done
+fi
+command -v om   >/dev/null || die "om CLI not found on PATH."
+command -v jq   >/dev/null || die "jq not found on PATH."
+command -v bosh >/dev/null || die "bosh CLI not found on PATH."
+# Maestro (optional) resolves a CA's signing topology — which deployments actually
+# host the leaf certs it signs — so a global/credhub CA's deployment-scoped phase
+# can be scoped precisely instead of defaulting to foundation-wide. USE_MAESTRO=0
+# forces the om-only path. om has no equivalent of `maestro tp`.
+HAVE_MAESTRO=0
+[[ "${USE_MAESTRO:-1}" == "1" ]] && command -v maestro >/dev/null && HAVE_MAESTRO=1
+
+# Deployments that host the leaf certs a CA signs (union over its signed leaves),
+# via `maestro tp`. Echoes a space-separated list of live deployment names; empty
+# if maestro is absent, errors, or names no deployment we can count.
+maestro_ca_deps(){ # ca-name
+  [[ $HAVE_MAESTRO -eq 1 ]] || return 0
+  local d out=""
+  while IFS= read -r d; do
+    [[ -n "${VM_BY_DEP[$d]:-}" ]] && out+="${out:+ }$d"
+  done < <(maestro tp --name "$1" 2>/dev/null | awk '
+      /deployment_names:/ { c=1; next }
+      c { if ($0 ~ /^[[:space:]]*-[[:space:]]/) { n=$0; sub(/^[[:space:]]*-[[:space:]]*/,"",n); print n }
+          else { c=0 } }' | sort -u)
+  printf '%s' "$out"
+}
+
+printf '%s%sPCF Certificate Rotation Estimate%s\n' "$BOLD" "$B" "$RST"
+printf 'Run as   : %s@%s   %s\n' "$(whoami)" "$(hostname)" "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+printf 'Horizon  : certificates expiring within %s  |  topology: %s\n' \
+  "$ROTATE_WINDOW" "$([[ $HAVE_MAESTRO -eq 1 ]] && echo 'maestro tp' || echo 'om only')"
+
+# ---------------------------------------------------------------------------
+# Convert an Ops Manager window (Nd/Nw/Nm/Ny) to days, for CA date math.
+# ---------------------------------------------------------------------------
+window_days(){ awk -v w="$1" 'BEGIN{
+  n=w; sub(/[a-zA-Z]+$/,"",n); u=w; sub(/^[0-9]+/,"",u);
+  if(u=="w") n=n*7; else if(u=="m") n=n*30; else if(u=="y") n=n*365;
+  printf "%d", n }'; }
+HORIZON_DAYS=$(window_days "$ROTATE_WINDOW")
+NOW_EPOCH=$(date -u +%s)
+
+# ---------------------------------------------------------------------------
+# 1. Foundation inventory — deployments, friendly product names, VM counts.
+# ---------------------------------------------------------------------------
+section "1. Foundation inventory"
+
+# guid -> product type (e.g. cf-abc123 -> cf). Deployment name == product guid.
+declare -A PROD_TYPE
+while IFS=$'\t' read -r guid ptype; do
+  [[ -z "$guid" ]] && continue
+  PROD_TYPE["$guid"]="$ptype"
+done < <(om curl -s -p /api/v0/deployed/products 2>/dev/null \
+          | jq -r '.[]? | [.guid, .type] | @tsv' 2>/dev/null)
+
+# Live VMs per deployment, broken down per instance group (real VMs only — errands
+# with no VM don't appear). The per-group split lets the cost model charge DB/Galera
+# nodes at the higher serial rate. IG_VMS["<dep><SEP><group>"]=count.
+declare -A VM_BY_DEP IG_VMS IG_ISDB
+declare -A DB_VMS_BY_DEP    # db-classified VMs per deployment (for reporting)
+DEPS=(); TOTAL_VMS=0; TOTAL_DB_VMS=0
+while IFS= read -r dep; do
+  [[ -z "$dep" ]] && continue
+  DEPS+=("$dep"); dep_total=0; dep_db=0
+  while IFS=$'\t' read -r cnt grp; do
+    [[ -z "$grp" || ! "$cnt" =~ ^[0-9]+$ ]] && continue
+    IG_VMS["${dep}${SEP}${grp}"]=$cnt
+    if grep -qiE "$DB_GROUPS_RE" <<<"$grp"; then
+      IG_ISDB["${dep}${SEP}${grp}"]=1; dep_db=$((dep_db + cnt))
+    else
+      IG_ISDB["${dep}${SEP}${grp}"]=0
+    fi
+    dep_total=$((dep_total + cnt))
+  done < <(bosh -d "$dep" --json vms 2>/dev/null \
+            | jq -r '.Tables[0].Rows[]? | (.instance | split("/")[0])' 2>/dev/null \
+            | sort | uniq -c | awk '{print $1"\t"$2}')
+  VM_BY_DEP["$dep"]=$dep_total; DB_VMS_BY_DEP["$dep"]=$dep_db
+  TOTAL_VMS=$((TOTAL_VMS + dep_total)); TOTAL_DB_VMS=$((TOTAL_DB_VMS + dep_db))
+done < <(bosh --json deployments 2>/dev/null | jq -r '.Tables[0].Rows[]?.name' 2>/dev/null)
+
+[[ $TOTAL_VMS -gt 0 ]] || die "Could not count any BOSH VMs — is the director reachable (source env.sh)?"
+info "Deployments: ${#VM_BY_DEP[@]} | total live VMs: ${TOTAL_VMS} (${TOTAL_DB_VMS} DB node(s) costed serially)"
+for dep in "${DEPS[@]}"; do
+  dbnote=""; [[ "${DB_VMS_BY_DEP[$dep]:-0}" -gt 0 ]] && dbnote=", ${DB_VMS_BY_DEP[$dep]} DB"
+  info "  ${dep} (${PROD_TYPE[$dep]:-?}): ${VM_BY_DEP[$dep]} VM(s)${dbnote}"
+done
+
+# ---------------------------------------------------------------------------
+# 2. Expiring certificates (Ops Manager deployed certs + the root CA).
+# ---------------------------------------------------------------------------
+section "2. Expiring certificates (<= ${ROTATE_WINDOW})"
+
+# Severity membership: keys (product_guid|property_reference) that fall in the
+# tighter crit/warn windows. The unfiltered list has null dates on this opsman,
+# so we lean on expires_within and tag by the smallest window each cert hits.
+# A cert's label is its property_reference (ops_manager certs) or variable_path
+# (credhub certs); one or the other is null/empty. Its key is product_guid|label.
+# Some certs (e.g. the Services TLS CA) ship product_guid="" — an EMPTY string, so
+# jq's `//` (which only fires on null/false) won't substitute it. These shared defs
+# coalesce empty *and* null, and the same defs drive the severity-window sets and
+# the planning set so the keys line up. Records use a \x1f delimiter, not a tab:
+# tab is IFS-whitespace, so `read` would trim an empty leading field and shift the
+# columns — exactly what mis-parsed the empty-guid Services TLS CA as a leaf.
+JQ_DEFS='
+  def lbl: [.property_reference, .variable_path] | map(select(. != null and . != "")) | (.[0] // "-");
+  def gid: (.product_guid // "") | if . == "" then "-" else . end;
+  def c:   (. // "-") | tostring | if . == "" then "-" else . end;'
+crit_keys="$(om curl -s -p "/api/v0/deployed/certificates?expires_within=${CERT_CRIT_WINDOW}" 2>/dev/null \
+  | jq -r "${JQ_DEFS} .certificates[]? | [gid, lbl] | join(\"|\")" 2>/dev/null)"
+warn_keys="$(om curl -s -p "/api/v0/deployed/certificates?expires_within=${CERT_WARN_WINDOW}" 2>/dev/null \
+  | jq -r "${JQ_DEFS} .certificates[]? | [gid, lbl] | join(\"|\")" 2>/dev/null)"
+
+# Planning set: everything expiring within the horizon, with the metadata we need.
+# The API names the rotation procedure per cert — that's what tells leaf from CA.
+certs_tsv="$(om curl -s -p "/api/v0/deployed/certificates?expires_within=${ROTATE_WINDOW}" 2>/dev/null \
+  | jq -r "${JQ_DEFS} .certificates[]? | [
+        gid, (.is_ca // false | tostring), lbl,
+        (.location|c), (.valid_until // \"\"), (.rotation_procedure_name // \"\")
+      ] | join(\"\")" 2>/dev/null)"
+
+# Accumulators for the estimate.
+N_LEAF=0; N_CA=0; N_CRIT=0; N_WARN=0
+declare -A LEAF_DEPS         # deployment -> 1, deployments touched by leaf rotations
+# Parallel CA record arrays, one entry per CA rotation (consumed by §3).
+CA_MODEL=(); CA_DEP=(); CA_LABEL=()
+
+emit_sev(){ # level message  -> calls the right logger and bumps counters
+  case "$1" in CRIT) crit "$2"; N_CRIT=$((N_CRIT+1));;
+               WARN) warn "$2"; N_WARN=$((N_WARN+1));;
+               *)    info "$2";; esac; }
+
+# Classify a CA's rotation SCOPE model from its label/procedure. Echoes the model;
+#   TRUSTED    services TLS CA — add/remove via BOSH trusted certs (foundation),
+#              leaf regen on the owning deployment. (checked first: it would also
+#              match the broad foundation pattern, but its model is different.)
+#   FOUNDATION genuine all-VM trust anchor — every phase foundation-wide.
+#   DEPLOYMENT everything else — every phase on the owning deployment only.
+ca_scope_model(){ # label proc
+  if grep -qiE "$CA_TRUSTED_CERTS_RE" <<<"$1 $2"; then echo TRUSTED
+  elif grep -qiE "$CA_FOUNDATION_RE" <<<"$1"; then echo FOUNDATION
+  else echo DEPLOYMENT; fi
+}
+# Human description of a CA's apply plan.
+ca_plan_text(){ # model dep
+  case "$1" in
+    FOUNDATION) echo "${CA_APPLY_COUNT}x foundation-wide";;
+    TRUSTED)    echo "${SERVICES_CA_FND_APPLIES}x foundation-wide (BOSH trusted-certs add+remove) + ${SERVICES_CA_DEP_APPLIES}x ${2}";;
+    DEPLOYMENT) echo "${DEP_CA_APPLIES}x ${2}";;
+  esac
+}
+
+if [[ -z "$certs_tsv" ]]; then
+  ok "No deployed certificates expire within ${ROTATE_WINDOW}."
+else
+  while IFS="$SEP" read -r pguid is_ca pref loc vuntil proc; do
+    [[ -z "$pref" || "$pref" == "-" ]] && continue
+    key="${pguid}|${pref}"
+    sev="INFO"
+    grep -qxF "$key" <<<"$warn_keys" && sev="WARN"
+    grep -qxF "$key" <<<"$crit_keys" && sev="CRIT"
+    ptxt="${proc:+ {${proc}}}"
+    # Friendly product label; empty-guid certs are foundation-global credhub CAs.
+    prod="${PROD_TYPE[$pguid]:-$pguid}"; [[ "$pguid" == "-" ]] && prod="credhub-global"
+
+    # CA rotation (3 Apply Changes) or leaf (1)? The API's rotation_procedure_name
+    # is authoritative; fall back to is_ca / the label regex if it's absent.
+    if { [[ -n "$proc" ]] && grep -qiE "$CA_PROCEDURE_RE" <<<"$proc"; } \
+       || [[ "$is_ca" == "true" ]] || grep -qiE "$CA_ROTATION_3X_RE" <<<"$pref"; then
+      N_CA=$((N_CA+1))
+      model="$(ca_scope_model "$pref" "$proc")"
+      # Resolve the deployment(s) for the deployment-scoped phase(s):
+      #   1. maestro tp — the deployments that actually host this CA's leaf certs
+      #   2. else the cert's own product_guid, if it names a live deployment
+      #   3. else foundation-wide (conservative; can't scope it any tighter)
+      dep="__FND__"; depnote=""
+      if [[ "$model" != FOUNDATION ]]; then
+        mdeps="$(maestro_ca_deps "$pref")"
+        if [[ -n "$mdeps" ]]; then dep="$mdeps"; depnote=" (scoped via maestro tp)"
+        elif [[ -n "${VM_BY_DEP[$pguid]:-}" ]]; then dep="$pguid"
+        else depnote=" (owning deployment unknown — leaf-regen costed foundation-wide)"; fi
+      fi
+      CA_MODEL+=("$model"); CA_DEP+=("$dep"); CA_LABEL+=("$pref")
+      depname="$dep"; [[ "$dep" == "__FND__" ]] && depname="foundation"; depname="${depname// /, }"
+      emit_sev "$sev" "CA   ${pref} [${prod}] — ${model}: $(ca_plan_text "$model" "$depname") Apply Changes${vuntil:+, expires ${vuntil}}${ptxt}${depnote}"
+    else
+      N_LEAF=$((N_LEAF+1))
+      dep="$pguid"; [[ -n "${VM_BY_DEP[$dep]:-}" ]] && LEAF_DEPS["$dep"]=1
+      vmc="${VM_BY_DEP[$dep]:-?}"
+      emit_sev "$sev" "leaf ${pref} [${prod}] — ${dep} (${vmc} VMs, ${LEAF_APPLY_COUNT}x Apply Changes)${vuntil:+, expires ${vuntil}}${ptxt}"
+    fi
+  done <<<"$certs_tsv"
+fi
+
+# Ops Manager root CA(s) — the certificate_authorities endpoint DOES carry an
+# expiry date, so check it directly even if it isn't in the deployed-cert list.
+while IFS=$'\t' read -r guid active expires; do
+  [[ -z "$guid" || "$active" != "true" || -z "$expires" ]] && continue
+  exp_epoch="$(date -u -d "$expires" +%s 2>/dev/null)" || continue
+  days=$(( (exp_epoch - NOW_EPOCH) / 86400 ))
+  [[ $days -gt $HORIZON_DAYS ]] && continue
+  N_CA=$((N_CA+1))
+  CA_MODEL+=("FOUNDATION"); CA_DEP+=("__FND__"); CA_LABEL+=("opsman-root-ca:${guid:0:8}")
+  msg="Ops Manager ROOT CA ${guid:0:8}… expires in ${days}d (${expires}) — FOUNDATION: ${CA_APPLY_COUNT}x foundation-wide Apply Changes over ${TOTAL_VMS} VMs"
+  if   [[ $days -le $(window_days "$CERT_CRIT_WINDOW") ]]; then crit "$msg"; N_CRIT=$((N_CRIT+1))
+  elif [[ $days -le $(window_days "$CERT_WARN_WINDOW") ]]; then warn "$msg"; N_WARN=$((N_WARN+1))
+  else info "$msg"; fi
+done < <(om curl -s -p /api/v0/certificate_authorities 2>/dev/null \
+          | jq -r '.certificate_authorities[]? | [.guid, .active, (.expires_on // "")] | @tsv' 2>/dev/null)
+
+# ---------------------------------------------------------------------------
+# 3. Rotation time estimate.
+# ---------------------------------------------------------------------------
+section "3. Estimated rotation time"
+
+# Leaf campaign: ONE Apply Changes over the union of affected deployments, costed
+# per instance group (so DB leaf certs are charged at the serial DB rate).
+leaf_deps=("${!LEAF_DEPS[@]}")
+LEAF_SCOPE_VMS=0
+for d in "${leaf_deps[@]}"; do LEAF_SCOPE_VMS=$((LEAF_SCOPE_VMS + ${VM_BY_DEP[$d]:-0})); done
+
+leaf_lo=0; leaf_hi=0
+if [[ $N_LEAF -gt 0 ]]; then
+  leaf_lo="$(napply "$LEAF_APPLY_COUNT" "$(scope_minutes low  "${leaf_deps[@]}")")"
+  leaf_hi="$(napply "$LEAF_APPLY_COUNT" "$(scope_minutes high "${leaf_deps[@]}")")"
+  info "Leaf certs: ${N_LEAF} across ${#leaf_deps[@]} deployment(s), ${LEAF_SCOPE_VMS} VMs"
+  info "  ${LEAF_APPLY_COUNT}x Apply Changes => $(fmt_min "$leaf_lo") – $(fmt_min "$leaf_hi")"
+fi
+
+# CA campaign: per CA, foundation-wide phases over ALL deployments + deployment-
+# scoped phases over the owning deployment. The cost of one foundation-wide Apply
+# is the same regardless of which CA triggers it, so when batched (default) the
+# foundation applies are shared once across every CA (you add all the new CAs, then
+# remove all the old ones, in common Apply Changes); the deployment-scoped leaf-
+# regen phases stay per-CA. Un-batched (CA_BATCH=0) costs every CA in full.
+FND_LO="$(scope_minutes low  "${DEPS[@]}")"   # one foundation-wide Apply (low)
+FND_HI="$(scope_minutes high "${DEPS[@]}")"   # one foundation-wide Apply (high)
+nf=0; nt=0; nd=0; max_fnd_phases=0
+ca_dep_lo=0; ca_dep_hi=0; nonbatch_lo=0; nonbatch_hi=0
+for i in "${!CA_MODEL[@]}"; do
+  model="${CA_MODEL[$i]}"; dep="${CA_DEP[$i]}"
+  case "$model" in
+    FOUNDATION) fph=$CA_APPLY_COUNT;        dph=0;                     nf=$((nf+1));;
+    TRUSTED)    fph=$SERVICES_CA_FND_APPLIES; dph=$SERVICES_CA_DEP_APPLIES; nt=$((nt+1));;
+    DEPLOYMENT) fph=0;                      dph=$DEP_CA_APPLIES;       nd=$((nd+1));;
+  esac
+  # dep may be "__FND__" or a space-separated deployment list (from maestro).
+  if [[ "$dep" == "__FND__" ]]; then od_lo="$FND_LO"; od_hi="$FND_HI"
+  else read -ra _depsarr <<<"$dep"
+       od_lo="$(scope_minutes low  "${_depsarr[@]}")"; od_hi="$(scope_minutes high "${_depsarr[@]}")"; fi
+  (( fph > max_fnd_phases )) && max_fnd_phases=$fph
+  ca_dep_lo="$(awk -v a="$ca_dep_lo" -v d="$dph" -v p="$od_lo" 'BEGIN{printf "%.4f", a+d*p}')"
+  ca_dep_hi="$(awk -v a="$ca_dep_hi" -v d="$dph" -v p="$od_hi" 'BEGIN{printf "%.4f", a+d*p}')"
+  nonbatch_lo="$(awk -v a="$nonbatch_lo" -v f="$fph" -v fp="$FND_LO" -v d="$dph" -v p="$od_lo" 'BEGIN{printf "%.4f", a+f*fp+d*p}')"
+  nonbatch_hi="$(awk -v a="$nonbatch_hi" -v f="$fph" -v fp="$FND_HI" -v d="$dph" -v p="$od_hi" 'BEGIN{printf "%.4f", a+f*fp+d*p}')"
+done
+
+ca_lo=0; ca_hi=0
+if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
+  if [[ "$CA_BATCH" == "1" ]]; then
+    ca_lo="$(awk -v f="$max_fnd_phases" -v fp="$FND_LO" -v d="$ca_dep_lo" 'BEGIN{printf "%.1f", f*fp+d}')"
+    ca_hi="$(awk -v f="$max_fnd_phases" -v fp="$FND_HI" -v d="$ca_dep_hi" 'BEGIN{printf "%.1f", f*fp+d}')"
+  else
+    ca_lo="$(awk -v x="$nonbatch_lo" 'BEGIN{printf "%.1f", x}')"
+    ca_hi="$(awk -v x="$nonbatch_hi" 'BEGIN{printf "%.1f", x}')"
+  fi
+  info "CA certs: ${#CA_MODEL[@]} — ${nf} foundation, ${nt} services/trusted-certs, ${nd} deployment-scoped"
+  for i in "${!CA_MODEL[@]}"; do
+    dn="${CA_DEP[$i]}"; [[ "$dn" == "__FND__" ]] && dn="foundation"; dn="${dn// /, }"
+    info "  - ${CA_LABEL[$i]} [${CA_MODEL[$i]}]: $(ca_plan_text "${CA_MODEL[$i]}" "$dn") Apply Changes"
+  done
+  if [[ "$CA_BATCH" == "1" ]]; then
+    info "  Batched: ${max_fnd_phases}x shared foundation-wide Apply ($(fmt_min "$FND_LO")–$(fmt_min "$FND_HI") each, ${TOTAL_VMS} VMs) + per-deployment leaf-regen"
+  else
+    info "  Un-batched: each CA's foundation applies costed separately"
+  fi
+  info "  => $(fmt_min "$ca_lo") – $(fmt_min "$ca_hi")"
+fi
+
+TOTAL_LO="$(awk -v a="$leaf_lo" -v b="$ca_lo" 'BEGIN{printf "%.1f", a+b}')"
+TOTAL_HI="$(awk -v a="$leaf_hi" -v b="$ca_hi" 'BEGIN{printf "%.1f", a+b}')"
+
+section "Summary"
+printf '  %sExpiring certs in horizon%s : %d (CRIT %d · WARN %d) — %d leaf, %d CA\n' \
+  "$BOLD" "$RST" "$((N_LEAF+N_CA))" "$N_CRIT" "$N_WARN" "$N_LEAF" "$N_CA"
+if [[ $((N_LEAF+N_CA)) -eq 0 ]]; then
+  ok "Nothing to rotate within ${ROTATE_WINDOW}."
+else
+  notetxt=""
+  [[ $nt -gt 0 ]] && notetxt="  (services TLS CA = ${SERVICES_CA_FND_APPLIES} foundation + ${SERVICES_CA_DEP_APPLIES} deployment applies)"
+  printf '  %sEstimated rotation time%s   : %s – %s%s\n' \
+    "$BOLD" "$RST" "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")" "$notetxt"
+  info "Model: ${APPLY_OVERHEAD_MIN}m overhead/apply; stateless ${MIN_PER_VM_LOW}-${MIN_PER_VM_HIGH}m/VM (${MAX_IN_FLIGHT} in flight), DB ${MIN_PER_VM_DB_LOW}-${MIN_PER_VM_DB_HIGH}m/node (${DB_MAX_IN_FLIGHT} in flight). Excludes change-window/approval gaps."
+fi
+
+# ---------------------------------------------------------------------------
+# JSON summary (CI gate). Written to the real stdout (fd 3) in --json mode.
+# ---------------------------------------------------------------------------
+if [[ $JSON_MODE -eq 1 ]]; then
+  jq -n \
+    --argjson total_vms "$TOTAL_VMS" --argjson db_vms "$TOTAL_DB_VMS" \
+    --argjson leaf "$N_LEAF" --argjson ca "$N_CA" \
+    --argjson crit "$N_CRIT" --argjson warn "$N_WARN" \
+    --argjson leaf_vms "$LEAF_SCOPE_VMS" \
+    --argjson nf "$nf" --argjson nt "$nt" --argjson nd "$nd" \
+    --argjson fnd_phases "$max_fnd_phases" \
+    --argjson lo "$TOTAL_LO" --argjson hi "$TOTAL_HI" \
+    --argjson ca_lo "$ca_lo" --argjson ca_hi "$ca_hi" \
+    --argjson leaf_lo "$leaf_lo" --argjson leaf_hi "$leaf_hi" \
+    --arg batch "$CA_BATCH" --arg window "$ROTATE_WINDOW" \
+    --arg topo "$([[ $HAVE_MAESTRO -eq 1 ]] && echo 'maestro' || echo 'om')" \
+    '{
+       window: $window, topology_source: $topo,
+       total_vms: $total_vms, db_vms: $db_vms, ca_batched: ($batch=="1"),
+       expiring: { leaf: $leaf, ca: $ca, crit: $crit, warn: $warn },
+       ca_models: { foundation: $nf, services_trusted_certs: $nt, deployment: $nd },
+       shared_foundation_applies: $fnd_phases,
+       leaf_scope_vms: $leaf_vms,
+       estimate_minutes: { leaf: { low: $leaf_lo, high: $leaf_hi },
+                           ca:   { low: $ca_lo,   high: $ca_hi },
+                           total:{ low: $lo,      high: $hi } },
+       estimate_human: { low: "'"$(fmt_min "$TOTAL_LO")"'", high: "'"$(fmt_min "$TOTAL_HI")"'" }
+     }' >&3
+fi
+
+# Exit status mirrors the health check: 0 clean, 1 warnings, 2 criticals.
+[[ $N_CRIT -gt 0 ]] && exit 2
+[[ $N_WARN -gt 0 ]] && exit 1
+exit 0
