@@ -14,6 +14,7 @@
 #     ./cert-rotation-estimate.sh --days 90      # plan for certs expiring <=90 days
 #     ./cert-rotation-estimate.sh --window 90d   # same, Ops Manager window syntax
 #     IG_RATE_OVERRIDES="router=8:15" ./cert-rotation-estimate.sh  # per-IG VM time
+#     ./cert-rotation-estimate.sh --name FOG     # title "PCF FOG Certificate Rotation Estimate"
 #
 # ---------------------------------------------------------------------------
 # Prerequisites — required environment (the script auto-sources ~/env.sh if
@@ -175,8 +176,8 @@ while [[ $# -gt 0 ]]; do
     --all) ROTATE_WINDOW="all";;
     --defer) DEFER_CA_REMOVAL=1;;
     --no-defer) DEFER_CA_REMOVAL=0;;
-    --foundation) shift; FOUNDATION_NAME="${1:-$FOUNDATION_NAME}";;
-    --foundation=*) FOUNDATION_NAME="${1#*=}";;
+    --foundation|--name) shift; FOUNDATION_NAME="${1:-$FOUNDATION_NAME}";;
+    --foundation=*|--name=*) FOUNDATION_NAME="${1#*=}";;
     -h|--help) sed -n '2,20p' "$0"; exit 0;;
   esac
   shift
@@ -302,7 +303,9 @@ maestro_ca_deps(){ # ca-name
   printf '%s' "$out"
 }
 
-printf '%s%sPCF Certificate Rotation Estimate%s\n' "$BOLD" "$B" "$RST"
+# Report title: "PCF <name> Certificate Rotation Estimate" (name from --name/--foundation).
+REPORT_TITLE="PCF${FOUNDATION_NAME:+ $FOUNDATION_NAME} Certificate Rotation Estimate"
+printf '%s%s%s%s\n' "$BOLD" "$B" "$REPORT_TITLE" "$RST"
 printf 'Run as   : %s@%s   %s\n' "$(whoami)" "$(hostname)" "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 # "all" / "infinite" = no horizon limit; everything else is an Ops Manager window.
 WINDOW_IS_ALL=0; [[ "$ROTATE_WINDOW" == "all" || "$ROTATE_WINDOW" == "infinite" ]] && WINDOW_IS_ALL=1
@@ -684,9 +687,8 @@ fi
 # ---------------------------------------------------------------------------
 if [[ $MD_MODE -eq 1 ]]; then
   badge(){ case "$1" in CRIT) printf '❌ CRIT';; WARN) printf '⚠️ WARN';; *) printf 'ℹ️ info';; esac; }
-  title="PCF${FOUNDATION_NAME:+ $FOUNDATION_NAME} Certificate Rotation Estimate"
   {
-    printf '# %s\n\n' "$title"
+    printf '# %s\n\n' "$REPORT_TITLE"
     printf -- '- **Director:** `%s`\n' "${BOSH_ENVIRONMENT:-?}"
     printf -- '- **Generated:** %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
     printf -- '- **Horizon:** %s\n' "$([[ $WINDOW_IS_ALL -eq 1 ]] && echo 'all certificates (no expiry limit)' || echo "certificates expiring within \`${ROTATE_WINDOW}\`")"

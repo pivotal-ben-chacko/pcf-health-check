@@ -1,7 +1,7 @@
 # PCF lab Certificate Rotation Estimate
 
 - **Director:** `192.168.2.2`
-- **Generated:** 2026-06-10 12:10:16 UTC
+- **Generated:** 2026-06-10 12:18:02 UTC
 - **Horizon:** all certificates (no expiry limit)
 - **Topology source:** `maestro tp`
 - **Update rules:** `bosh manifest` (per-IG max_in_flight/canaries)
