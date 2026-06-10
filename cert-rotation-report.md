@@ -1,7 +1,7 @@
 # PCF lab Certificate Rotation Estimate
 
 - **Director:** `192.168.2.2`
-- **Generated:** 2026-06-10 11:02:41 UTC
+- **Generated:** 2026-06-10 11:12:17 UTC
 - **Horizon:** all certificates (no expiry limit)
 - **Topology source:** `maestro tp`
 - **Update rules:** `bosh manifest` (per-IG max_in_flight/canaries)
@@ -18,9 +18,9 @@
 
 ## Foundation inventory
 
-| Deployment | Type | VMs | DB nodes |
-|---|---|---:|---:|
-| `cf-dbe1a7580979a87638e7` | cf | 7 | 2 |
+| Deployment | Type | VMs | Est. cert-rotation time |
+|---|---|---:|---|
+| `cf-dbe1a7580979a87638e7` | cf | 7 | 3h 00m – 5h 30m |
 
 > 2 instance group(s) have `serial:false` — they may update in parallel, so real time can come in under the (conservative serial) estimate.
 

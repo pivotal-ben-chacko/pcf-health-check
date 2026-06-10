@@ -687,9 +687,18 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf '\n'
 
     printf '## Foundation inventory\n\n'
-    printf '| Deployment | Type | VMs | DB nodes |\n|---|---|---:|---:|\n'
+    # Per-deployment rotation time = (foundation-wide applies that recreate it) x
+    # one-apply cost over its VMs. Falls back to the leaf apply if there are no CAs.
+    if [[ ${imm_fnd:-0} -gt 0 ]]; then dep_applies=$imm_fnd
+    elif [[ $N_LEAF -gt 0 ]]; then dep_applies=$LEAF_APPLY_COUNT; else dep_applies=0; fi
+    printf '| Deployment | Type | VMs | Est. cert-rotation time |\n|---|---|---:|---|\n'
     for dep in "${DEPS[@]}"; do
-      printf '| `%s` | %s | %d | %d |\n' "$(md_esc "$dep")" "${PROD_TYPE[$dep]:-?}" "${VM_BY_DEP[$dep]:-0}" "${DB_VMS_BY_DEP[$dep]:-0}"
+      if [[ $dep_applies -gt 0 ]]; then
+        dlo="$(napply "$dep_applies" "$(scope_minutes low  "$dep")")"
+        dhi="$(napply "$dep_applies" "$(scope_minutes high "$dep")")"
+        dtime="$(fmt_min "$dlo") – $(fmt_min "$dhi")"
+      else dtime="—"; fi
+      printf '| `%s` | %s | %d | %s |\n' "$(md_esc "$dep")" "${PROD_TYPE[$dep]:-?}" "${VM_BY_DEP[$dep]:-0}" "$dtime"
     done
     [[ ${N_PARALLEL_IG:-0} -gt 0 ]] && printf '\n> %d instance group(s) have `serial:false` — they may update in parallel, so real time can come in under the (conservative serial) estimate.\n' "$N_PARALLEL_IG"
     printf '\n'
