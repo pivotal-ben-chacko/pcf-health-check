@@ -598,11 +598,11 @@ if [[ $MD_MODE -eq 1 ]]; then
   title="PCF${FOUNDATION_NAME:+ $FOUNDATION_NAME} Certificate Rotation Estimate"
   {
     printf '# %s\n\n' "$title"
-    printf '- **Director:** `%s`\n' "${BOSH_ENVIRONMENT:-?}"
-    printf '- **Generated:** %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-    printf '- **Horizon:** certificates expiring within `%s`\n' "$ROTATE_WINDOW"
-    printf '- **Topology source:** %s\n' "$([[ $HAVE_MAESTRO -eq 1 ]] && echo '`maestro tp`' || echo 'om only')"
-    printf '- **Update rules:** %s\n\n' "$([[ $HAVE_PYYAML -eq 1 ]] && echo '`bosh manifest` (per-IG max_in_flight/canaries)' || echo 'global fallback')"
+    printf -- '- **Director:** `%s`\n' "${BOSH_ENVIRONMENT:-?}"
+    printf -- '- **Generated:** %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    printf -- '- **Horizon:** certificates expiring within `%s`\n' "$ROTATE_WINDOW"
+    printf -- '- **Topology source:** %s\n' "$([[ $HAVE_MAESTRO -eq 1 ]] && echo '`maestro tp`' || echo 'om only')"
+    printf -- '- **Update rules:** %s\n\n' "$([[ $HAVE_PYYAML -eq 1 ]] && echo '`bosh manifest` (per-IG max_in_flight/canaries)' || echo 'global fallback')"
 
     printf '## Summary\n\n'
     printf '| Metric | Value |\n|---|---|\n'
@@ -656,12 +656,12 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf '| **Total** | | **%s – %s** |\n\n' "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")"
 
     printf '## Model & assumptions\n\n'
-    printf '- %dm overhead per Apply Changes; stateless %d–%dm/VM, DB %d–%dm/node.\n' \
+    printf -- '- %dm overhead per Apply Changes; stateless %d–%dm/VM, DB %d–%dm/node.\n' \
       "$APPLY_OVERHEAD_MIN" "$MIN_PER_VM_LOW" "$MIN_PER_VM_HIGH" "$MIN_PER_VM_DB_LOW" "$MIN_PER_VM_DB_HIGH"
-    [[ ${#OV_PAT[@]} -gt 0 ]] && printf '- Manual per-IG overrides active: `%s`.\n' "$(md_esc "$IG_RATE_OVERRIDES")"
-    printf '- A FOUNDATION CA = %d foundation-wide applies; a services TLS CA = %d foundation + %d deployment applies; a deployment CA = %d on its deployment.\n' \
+    [[ ${#OV_PAT[@]} -gt 0 ]] && printf -- '- Manual per-IG overrides active: `%s`.\n' "$(md_esc "$IG_RATE_OVERRIDES")"
+    printf -- '- A FOUNDATION CA = %d foundation-wide applies; a services TLS CA = %d foundation + %d deployment applies; a deployment CA = %d on its deployment.\n' \
       "$CA_APPLY_COUNT" "$SERVICES_CA_FND_APPLIES" "$SERVICES_CA_DEP_APPLIES" "$DEP_CA_APPLIES"
-    printf '- Estimate is **Apply Changes compute time only** — it excludes change-window / approval gaps between phases, which often dominate the wall-clock for CA rotations.\n'
+    printf -- '- Estimate is **Apply Changes compute time only** — it excludes change-window / approval gaps between phases, which often dominate the wall-clock for CA rotations.\n'
   } >&3
 fi
 

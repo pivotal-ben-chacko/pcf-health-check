@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>PCF lab Certificate Rotation Estimate</title>
+  <style>
+
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+.display.math{display: block; text-align: center; margin: 0.5rem auto;}
+</style>
+  <style type="text/css">
+body {
+font-family: Arial, sans-serif;
+font-size: 11pt;
+line-height: 1.6;
+color: #1A1A1A;
+background: #FFFFFF;
+max-width: 900px;
+margin: 2rem auto;
+padding: 0 1.5rem;
+}
+
+.brand-header {
+text-align: center;
+margin: 0 0 6px;
+}
+.brand-logo {
+height: 42px;
+width: auto;
+}
+
+h1 {
+font-size: 17pt;
+color: #1A1A1A;
+border-bottom: 3px solid #FF6600;
+padding-bottom: 8px;
+margin-top: 4px;
+margin-bottom: 16px;
+text-align: center;
+}
+h2 {
+font-size: 15pt;
+color: #1A1A1A;
+border-left: 4px solid #FF6600;
+padding-left: 10px;
+margin-top: 28px;
+margin-bottom: 10px;
+}
+h3 {
+font-size: 12pt;
+color: #FF6600;
+margin-top: 18px;
+margin-bottom: 6px;
+}
+h4 {
+font-size: 11pt;
+color: #4A4A4A;
+margin-top: 12px;
+}
+
+p {
+color: #1A1A1A;
+margin-bottom: 10px;
+}
+
+hr {
+border: none;
+border-top: 2px solid #FF6600;
+margin: 22px 0;
+opacity: 0.3;
+}
+
+blockquote {
+border-left: 4px solid #FF6600;
+background-color: #FFF3EB;
+margin: 14px 0;
+padding: 10px 16px;
+border-radius: 0 4px 4px 0;
+color: #1A1A1A;
+font-size: 12pt;
+}
+
+code {
+background-color: #FFF3EB;
+border: 1px solid #FFE0C8;
+border-radius: 3px;
+padding: 1px 5px;
+font-size: 9pt;
+color: #CC5200;
+word-break: break-all;
+}
+
+pre {
+background-color: #F7F7F7;
+border: 1px solid #DDDDDD;
+border-left: 3px solid #FF6600;
+border-radius: 0 4px 4px 0;
+padding: 12px 14px;
+white-space: pre-wrap;
+word-wrap: break-word;
+word-break: break-all;
+font-size: 9pt;
+line-height: 1.45;
+width: 100%;
+box-sizing: border-box;
+margin: 10px 0;
+}
+pre code {
+background: none;
+border: none;
+padding: 0;
+color: #1A1A1A;
+word-break: break-all;
+white-space: pre-wrap;
+}
+
+table {
+width: 100%;
+border-collapse: collapse;
+margin: 16px 0;
+font-size: 10pt;
+}
+thead tr {
+background-color: #C8C8C8;
+color: #1A1A1A;
+}
+th {
+padding: 9px 12px;
+text-align: left;
+font-weight: bold;
+color: #1A1A1A;
+}
+td {
+padding: 8px 12px;
+border: 1px solid #DDDDDD;
+color: #1A1A1A;
+}
+tr:nth-child(even) td {
+background-color: #FFF3EB;
+}
+tr:nth-child(odd) td {
+background-color: #FFFFFF;
+}
+
+a {
+color: #FF6600;
+text-decoration: none;
+}
+
+ul, ol {
+margin: 8px 0 12px 20px;
+color: #1A1A1A;
+}
+li {
+margin-bottom: 4px;
+}
+
+em {
+color: #6B6B6B;
+}
+
+@media print {
+body { margin: 0; max-width: 100%; }
+h2 { page-break-after: avoid; }
+table { page-break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<div class="brand-header">
+<svg class="brand-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 71.68 36" role="img" aria-label="Fiserv"><rect x="67.1" y="31.11" width="4.58" height="4.58" fill="#f60" /><polygon points="57.82 10.73 60.55 31.18 63.27 10.73 67.51 10.73 63.54 35.68 57.5 35.68 53.57 10.73 57.82 10.73" fill="#f60"></polygon><path d="M2.35,10.73H0v3.32H2.35v21.64H6.49V14.04h2.91v-3.32h-2.91V5.66c0-.74,.15-1.31,.51-1.69,.36-.39,.91-.57,1.65-.57h.75V0h-1.5c-1.84,0-3.61,.39-4.45,1.19-.84,.8-1.09,2.04-1.09,3.81v5.72Z" fill="#f60" /><rect x="10.69" y="10.73" width="4.15" height="24.95" fill="#f60" /><path d="M34,24.62h8.65v-7.69c-.01-4.6-2.22-6.49-6.41-6.49s-6.4,1.88-6.4,6.52v12.64c.01,4.22,2.57,6.4,6.4,6.4s6.4-1.8,6.42-6.4v-2h-4.01s0,1.78,0,2.37c0,1.69-.63,2.86-2.33,2.86s-2.32-1.18-2.32-2.86v-5.35Zm0-8.52c0-1.41,.37-2.87,2.31-2.87s2.33,1.44,2.33,2.86v5.16h-4.64v-5.16Z" fill="#f60" /><path d="M24.17,21.5c-3.13-2.75-3.39-3.13-3.39-5.16,0-1.74,.15-2.79,1.71-2.79s1.76,1.04,1.76,2.81v2.3h4v-3.76c-.01-2.95-2.28-4.45-5.85-4.45s-5.8,1.17-5.82,5.89c0,.8,0,.8,0,.49,0,1.48,.01,3.83,3.68,6.98l1.05,.9c2.7,2.28,3,2.55,2.99,5.26,0,1.67-.1,2.94-1.86,2.94s-1.86-1.28-1.86-2.06v-3.19h-4.2v3.29c0,4.05,2.64,5.06,6.06,5.06s6.06-1.01,6.06-6.23v-.43c0-3.64-.67-4.62-4.33-7.84Z" fill="#f60" /><path d="M48.2,13.3v-2.57h-3.78v24.95h4.08V18.29c0-1.34,.44-2.23,1.2-2.75,.72-.5,1.61-.67,2.74-.68v-4.42c-2.16,.04-3.1,.47-4.2,2.76l-.04,.09Z" fill="#f60" /></svg>
+</div>
+<h1 id="pcf-lab-certificate-rotation-estimate">PCF lab Certificate
+Rotation Estimate</h1>
+<ul>
+<li><strong>Director:</strong> <code>192.168.2.2</code></li>
+<li><strong>Generated:</strong> 2026-06-10 10:13:00 UTC</li>
+<li><strong>Horizon:</strong> certificates expiring within
+<code>5y</code></li>
+<li><strong>Topology source:</strong> <code>maestro tp</code></li>
+<li><strong>Update rules:</strong> <code>bosh manifest</code> (per-IG
+max_in_flight/canaries)</li>
+</ul>
+<h2 id="summary">Summary</h2>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Expiring certs (≤ 5y)</td>
+<td>112 (❌ 0 · ⚠️ 0)</td>
+</tr>
+<tr>
+<td>— leaf / CA</td>
+<td>105 / 7</td>
+</tr>
+<tr>
+<td>Live VMs (DB nodes)</td>
+<td>7 (2)</td>
+</tr>
+<tr>
+<td>One foundation-wide Apply</td>
+<td>1h 00m – 1h 50m</td>
+</tr>
+<tr>
+<td><strong>Estimated rotation time</strong></td>
+<td><strong>11h 00m – 20h 10m</strong></td>
+</tr>
+</tbody>
+</table>
+<h2 id="foundation-inventory">Foundation inventory</h2>
+<table>
+<thead>
+<tr>
+<th>Deployment</th>
+<th>Type</th>
+<th style="text-align: right;">VMs</th>
+<th style="text-align: right;">DB nodes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cf-dbe1a7580979a87638e7</code></td>
+<td>cf</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">2</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>2 instance group(s) have <code>serial:false</code> — they may update
+in parallel, so real time can come in under the (conservative serial)
+estimate.</p>
+</blockquote>
+<h2 id="ca-rotations-3-phase">CA rotations (3-phase)</h2>
+<table>
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+</colgroup>
+<thead>
+<tr>
+<th>CA</th>
+<th>Scope model</th>
+<th>Apply plan</th>
+<th>Expires</th>
+<th>Severity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.properties.nats_client_ca.3506e33356bef86af963</code></td>
+<td>FOUNDATION</td>
+<td>3x foundation-wide</td>
+<td>2030-05-29T03:06:57Z</td>
+<td>ℹ️ info</td>
+</tr>
+<tr>
+<td><code>.properties.root_ca.3506e33356bef86af963</code></td>
+<td>FOUNDATION</td>
+<td>3x foundation-wide</td>
+<td>2030-05-29T03:06:57Z</td>
+<td>ℹ️ info</td>
+</tr>
+<tr>
+<td><code>/p-bosh/cf-dbe1a7580979a87638e7/diego-instance-identity-intermediate-ca-2-7</code></td>
+<td>DEPLOYMENT</td>
+<td>3x cf-dbe1a7580979a87638e7</td>
+<td>2028-06-09T04:19:47Z</td>
+<td>ℹ️ info</td>
+</tr>
+<tr>
+<td><code>/opsmgr/bosh_dns/tls_ca</code></td>
+<td>FOUNDATION</td>
+<td>3x foundation-wide</td>
+<td>2030-05-29T16:32:50Z</td>
+<td>ℹ️ info</td>
+</tr>
+<tr>
+<td><code>/cf/diego-instance-identity-root-ca-2-6</code></td>
+<td>DEPLOYMENT</td>
+<td>3x cf-dbe1a7580979a87638e7</td>
+<td>2029-05-29T16:32:45Z</td>
+<td>ℹ️ info</td>
+</tr>
+<tr>
+<td><code>/services/tls_ca</code></td>
+<td>TRUSTED</td>
+<td>2x foundation-wide (BOSH trusted-certs add+remove) + 1x
+cf-dbe1a7580979a87638e7</td>
+<td>2031-05-29T03:24:34Z</td>
+<td>ℹ️ info</td>
+</tr>
+<tr>
+<td><code>opsman-root-ca:3506e333</code></td>
+<td>FOUNDATION</td>
+<td>3x foundation-wide</td>
+<td>2030-05-29T03:06:57Z</td>
+<td>ℹ️ info</td>
+</tr>
+</tbody>
+</table>
+<h2 id="leaf-certificates-1-phase">Leaf certificates (1-phase)</h2>
+<table>
+<thead>
+<tr>
+<th>Deployment</th>
+<th style="text-align: right;">Leaf certs</th>
+<th>Apply</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>p-bosh (not VM-counted)</code></td>
+<td style="text-align: right;">11</td>
+<td>1× (with the leaf campaign)</td>
+</tr>
+<tr>
+<td><code>cf-dbe1a7580979a87638e7</code></td>
+<td style="text-align: right;">94</td>
+<td>1× (with the leaf campaign)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="estimate-breakdown">Estimate breakdown</h2>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Campaign</th>
+<th>Applies</th>
+<th>Time (low – high)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Leaf certs</td>
+<td>1× over 2 deployment(s)</td>
+<td>1h 00m – 1h 50m</td>
+</tr>
+<tr>
+<td>CA certs (batched)</td>
+<td>3× foundation-wide + per-deployment leaf-regen</td>
+<td>10h 00m – 18h 20m</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td></td>
+<td><strong>11h 00m – 20h 10m</strong></td>
+</tr>
+</tbody>
+</table>
+<h2 id="model-assumptions">Model &amp; assumptions</h2>
+<ul>
+<li>20m overhead per Apply Changes; stateless 4–10m/VM, DB
+10–20m/node.</li>
+<li>A FOUNDATION CA = 3 foundation-wide applies; a services TLS CA = 2
+foundation + 1 deployment applies; a deployment CA = 3 on its
+deployment.</li>
+<li>Estimate is <strong>Apply Changes compute time only</strong> — it
+excludes change-window / approval gaps between phases, which often
+dominate the wall-clock for CA rotations.</li>
+</ul>
+</body>
+</html>
