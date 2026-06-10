@@ -695,13 +695,16 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf '\n'
 
     if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
+      # Raw HTML table with a colgroup so the certificate name gets most of the
+      # width and the fixed-width expiry stays on one line (styled by the shared CSS).
       printf '## CA rotations (3-phase)\n\n'
-      printf '| Certificate | Expires | Severity |\n|---|---|---|\n'
+      printf '<table>\n<colgroup><col style="width:82%%"><col style="width:18%%"></colgroup>\n'
+      printf '<thead><tr><th>Certificate</th><th>Expires</th></tr></thead>\n<tbody>\n'
       for i in "${!CA_MODEL[@]}"; do
-        printf '| `%s` | %s | %s |\n' \
-          "$(md_esc "${CA_LABEL[$i]}")" "${CA_EXP[$i]}" "$(badge "${CA_SEV[$i]}")"
+        printf '<tr><td><code>%s</code></td><td style="white-space:nowrap">%s</td></tr>\n' \
+          "${CA_LABEL[$i]}" "${CA_EXP[$i]}"
       done
-      printf '\n'
+      printf '</tbody>\n</table>\n\n'
     fi
 
     if [[ $N_LEAF -gt 0 ]]; then
