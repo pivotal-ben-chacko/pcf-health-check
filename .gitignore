@@ -1,0 +1,5 @@
+# Local foundation credentials — never commit secrets.
+env.sh
+
+# Local Claude Code settings
+.claude/

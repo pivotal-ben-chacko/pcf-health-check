@@ -15,6 +15,28 @@
 #     ./cert-rotation-estimate.sh --window 90d   # same, Ops Manager window syntax
 #     IG_RATE_OVERRIDES="router=8:15" ./cert-rotation-estimate.sh  # per-IG VM time
 #
+# ---------------------------------------------------------------------------
+# Prerequisites — required environment (the script auto-sources ~/env.sh if
+# BOSH_ENVIRONMENT is unset; otherwise export these first). bosh, om, jq must be
+# on PATH; maestro + python3/PyYAML are optional enrichers.
+# WARNING: these are live foundation credentials — keep them in the on-opsman
+# env.sh (untracked) and do NOT commit/push real secrets to a shared remote.
+# ---------------------------------------------------------------------------
+#     export BOSH_CLIENT=ops_manager
+#     export BOSH_CLIENT_SECRET=<bosh-client-secret>
+#     export BOSH_CA_CERT=/var/tempest/workspaces/default/root_ca_certificate
+#     export BOSH_ENVIRONMENT=192.168.2.2            # BOSH director IP
+#
+#     export CREDHUB_SERVER=$BOSH_ENVIRONMENT:8844
+#     export CREDHUB_CLIENT=$BOSH_CLIENT
+#     export CREDHUB_SECRET=$BOSH_CLIENT_SECRET
+#     export CREDHUB_CA_CERT=$BOSH_CA_CERT
+#
+#     export OM_TARGET="https://opsman.<your-domain>"
+#     export OM_USERNAME="admin"
+#     export OM_PASSWORD=<opsman-admin-password>
+#     export OM_SKIP_SSL_VALIDATION=true
+#
 # It is strictly READ-ONLY — it only reads cert metadata and VM counts; it never
 # rotates anything or touches the foundation.
 #
