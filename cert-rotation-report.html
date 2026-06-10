@@ -188,7 +188,7 @@ table { page-break-inside: avoid; }
 Rotation Estimate</h1>
 <ul>
 <li><strong>Director:</strong> <code>192.168.2.2</code></li>
-<li><strong>Generated:</strong> 2026-06-10 12:04:48 UTC</li>
+<li><strong>Generated:</strong> 2026-06-10 12:10:16 UTC</li>
 <li><strong>Horizon:</strong> all certificates (no expiry limit)</li>
 <li><strong>Topology source:</strong> <code>maestro tp</code></li>
 <li><strong>Update rules:</strong> <code>bosh manifest</code> (per-IG
@@ -213,19 +213,19 @@ max_in_flight/canaries)</li>
 </tr>
 <tr>
 <td>— require Digicert (operator-supplied)</td>
-<td>3</td>
+<td>2</td>
 </tr>
 <tr>
-<td>Live VMs (DB nodes)</td>
-<td>7 (2)</td>
+<td>Live VMs</td>
+<td>7</td>
 </tr>
 <tr>
 <td>One foundation-wide Apply</td>
-<td>1h 00m – 1h 50m</td>
+<td>48m – 1h 30m</td>
 </tr>
 <tr>
 <td><strong>Estimated rotation time</strong></td>
-<td><strong>3h 00m – 5h 30m</strong></td>
+<td><strong>2h 24m – 4h 30m</strong></td>
 </tr>
 </tbody>
 </table>
@@ -244,7 +244,7 @@ max_in_flight/canaries)</li>
 <td><code>cf-dbe1a7580979a87638e7</code></td>
 <td>cf</td>
 <td style="text-align: right;">7</td>
-<td>3h 00m – 5h 30m</td>
+<td>2h 24m – 4h 30m</td>
 </tr>
 </tbody>
 </table>
@@ -372,14 +372,6 @@ Expires
 <tbody>
 <tr>
 <td>
-<code>.properties.root_ca.3506e33356bef86af963</code>
-</td>
-<td style="white-space:nowrap">
-2030-05-29T03:06:57Z
-</td>
-</tr>
-<tr>
-<td>
 <code>.properties.networking_poe_ssl_certs[0].certificate</code>
 </td>
 <td style="white-space:nowrap">
@@ -419,19 +411,18 @@ Expires
 <tr>
 <td>CA certs (full batch)</td>
 <td>3× foundation-wide on all tiles — all CAs + leaves</td>
-<td>3h 00m – 5h 30m</td>
+<td>2h 24m – 4h 30m</td>
 </tr>
 <tr>
 <td><strong>Total</strong></td>
 <td></td>
-<td><strong>3h 00m – 5h 30m</strong></td>
+<td><strong>2h 24m – 4h 30m</strong></td>
 </tr>
 </tbody>
 </table>
 <h2 id="model-assumptions">Model &amp; assumptions</h2>
 <ul>
-<li>20m overhead per Apply Changes; stateless 4–10m/VM, DB
-10–20m/node.</li>
+<li>20m overhead per Apply Changes; 4–10m per VM.</li>
 <li>A FOUNDATION CA = 3 foundation-wide applies; a services TLS CA = 2
 foundation + 1 deployment applies; a deployment CA = 3 on its
 deployment.</li>

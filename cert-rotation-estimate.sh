@@ -45,15 +45,14 @@
 #     * DEPLOYMENT CA (e.g. a per-tile intermediate CA): all 3 phases hit only the
 #       owning deployment.
 #
-# The per-VM cost is not uniform either: database/Galera nodes drain + resync (SST)
-# and must roll serially, so they are costed higher (MIN_PER_VM_DB_*) than stateless
-# VMs, per instance group. So the time model is:
+# Every VM costs the same per-VM rate; how many update in parallel (max_in_flight)
+# and how many canaries go first come from each instance group's real BOSH `update`
+# block. So the time model is:
 #     apply_minutes(scope) = APPLY_OVERHEAD_MIN
-#         + Σ over instance groups in scope: ceil(group_vms / in_flight) * rate
-#       where rate / in_flight is the DB pair for database groups, else the default.
+#         + Σ over instance groups in scope: canaries*rate + ceil((n-canaries)/max_in_flight)*rate
 #     total = leaf_applies * apply_minutes(leaf deployments)
 #           + Σ over CAs: fnd_phases*apply_minutes(foundation) + dep_phases*apply_minutes(owning dep)
-# reported as a low–high range (MIN_PER_VM[_DB]_LOW/HIGH bound the per-VM cost).
+# reported as a low–high range (MIN_PER_VM_LOW/HIGH bound the per-VM cost).
 #
 # Tools: this uses `om` (already authenticated by env.sh). The same cert
 # inventory is available from Broadcom's `maestro` CLI; swap the om curl calls
@@ -76,26 +75,20 @@ CERT_WARN_WINDOW=${CERT_WARN_WINDOW:-1m}
 # `read` — see the section-2 note). Defined here because section 1 uses it too.
 SEP=$'\x1f'
 
-# Apply Changes cost model. A VM's update DURATION comes from the rate (stateless
-# MIN_PER_VM_* vs database MIN_PER_VM_DB_*, which drain + SST-resync and so cost
-# more); how many update in PARALLEL (max_in_flight) and how many canaries go first
-# come from each instance group's real BOSH `update` block when USE_MANIFEST_UPDATE
-# is on (the MAX_IN_FLIGHT/DB_MAX_IN_FLIGHT below are only the fallback when the
-# manifest can't be read). per-IG time = canaries*rate + ceil((n-canaries)/mif)*rate.
-MIN_PER_VM_LOW=${MIN_PER_VM_LOW:-4}        # fast stateless VM update
-MIN_PER_VM_HIGH=${MIN_PER_VM_HIGH:-10}     # slow stateless VM update (drain + post-start)
-MAX_IN_FLIGHT=${MAX_IN_FLIGHT:-1}          # fallback parallelism for stateless groups
-MIN_PER_VM_DB_LOW=${MIN_PER_VM_DB_LOW:-10} # DB node: drain + IST resync
-MIN_PER_VM_DB_HIGH=${MIN_PER_VM_DB_HIGH:-20} # DB node: drain + full SST resync
-DB_MAX_IN_FLIGHT=${DB_MAX_IN_FLIGHT:-1}    # fallback parallelism for DB groups
+# Apply Changes cost model. Every VM costs MIN_PER_VM_LOW..HIGH minutes to update;
+# how many update in PARALLEL (max_in_flight) and how many canaries go first come
+# from each instance group's real BOSH `update` block when USE_MANIFEST_UPDATE is
+# on (MAX_IN_FLIGHT below is only the fallback when the manifest can't be read).
+# per-IG time = canaries*rate + ceil((n-canaries)/max_in_flight)*rate.
+MIN_PER_VM_LOW=${MIN_PER_VM_LOW:-4}        # fast VM update
+MIN_PER_VM_HIGH=${MIN_PER_VM_HIGH:-10}     # slow VM update (drain + post-start)
+MAX_IN_FLIGHT=${MAX_IN_FLIGHT:-1}          # fallback parallelism per group
 APPLY_OVERHEAD_MIN=${APPLY_OVERHEAD_MIN:-20}   # staging/compile/migrations per Apply
 # Read real max_in_flight/canaries/serial per instance group from `bosh manifest`
-# (needs python3 + PyYAML). 0 = use the MAX_IN_FLIGHT fallbacks above instead.
+# (needs python3 + PyYAML). 0 = use the MAX_IN_FLIGHT fallback above instead.
 USE_MANIFEST_UPDATE=${USE_MANIFEST_UPDATE:-1}
-# Instance groups costed at the DB rate (matched on the BOSH instance-group name).
-DB_GROUPS_RE=${DB_GROUPS_RE:-'(mysql|database|galera|pxc|postgres|pgsql|rds|cockroach|^db[-_])'}
 # Manual per-instance-group update-time overrides — highest precedence, beats the
-# DB/stateless rates above. Space/comma-separated "pattern=low:high" (minutes);
+# default rate. Space/comma-separated "pattern=low:high" (minutes);
 # pattern is a case-insensitive regex on the BOSH instance-group name, first match
 # wins. The instance group is the unit of update (all its VMs are identical), so
 # this is how you hand-set the time for a particular VM type. Parallelism still
@@ -195,33 +188,30 @@ die(){  printf '\n%s[FATAL]%s %s\n' "$R" "$RST" "$1" >&2; exit 2; }
 # minutes -> "2h 35m" (or "45m")
 fmt_min(){ awk -v m="$1" 'BEGIN{ m=int(m+0.5); h=int(m/60); r=m%60;
   if(h>0) printf "%dh %02dm", h, r; else printf "%dm", r }'; }
-# Minutes for ONE Apply Changes over the given deployments, costed per instance
-# group. The per-VM RATE is the DB rate for database groups, else stateless. The
+# Minutes for ONE Apply Changes over the given deployments. Every VM costs the same
+# rate (unless a manual IG_RATE_OVERRIDES pattern matches its instance group). The
 # PARALLELISM (max_in_flight, possibly "N%") and canary count come from the real
-# manifest `update` block (IG_MIF/IG_CAN from §1) when present, else the global
-# fallback. per-IG = canaries*rate + ceil((n-canaries)/max_in_flight)*rate.
+# manifest `update` block (IG_MIF/IG_CAN from §1) when present, else the fallback.
+# per-IG = canaries*rate + ceil((n-canaries)/max_in_flight)*rate.
 # `which` selects the low or high per-VM cost.
 scope_minutes(){ # which(low|high)  dep1 [dep2 ...]
   local which=$1; shift
-  local nrate drate
-  if [[ "$which" == high ]]; then nrate=$MIN_PER_VM_HIGH; drate=$MIN_PER_VM_DB_HIGH
-  else nrate=$MIN_PER_VM_LOW; drate=$MIN_PER_VM_DB_LOW; fi
-  local total=0 d key grp cnt isdb rate defmif mraw can ovrate oi
+  local nrate
+  if [[ "$which" == high ]]; then nrate=$MIN_PER_VM_HIGH; else nrate=$MIN_PER_VM_LOW; fi
+  local total=0 d key grp cnt rate mraw can ovrate oi
   for d in "$@"; do
     for key in "${!IG_VMS[@]}"; do
       [[ "$key" == "${d}${SEP}"* ]] || continue
-      grp="${key#*$SEP}"; cnt="${IG_VMS[$key]}"; isdb="${IG_ISDB[$key]:-0}"
-      # rate precedence: manual IG override > DB rate > stateless rate.
+      grp="${key#*$SEP}"; cnt="${IG_VMS[$key]}"
+      # rate precedence: manual IG override > default rate.
       ovrate=""
       for oi in "${!OV_PAT[@]}"; do
         grep -qiE "${OV_PAT[$oi]}" <<<"$grp" || continue
         ovrate="$([[ "$which" == high ]] && echo "${OV_HI[$oi]}" || echo "${OV_LO[$oi]}")"; break
       done
-      if   [[ -n "$ovrate" ]]; then rate=$ovrate;  defmif=$MAX_IN_FLIGHT
-      elif [[ "$isdb" == "1" ]]; then rate=$drate; defmif=$DB_MAX_IN_FLIGHT
-      else rate=$nrate; defmif=$MAX_IN_FLIGHT; fi
+      rate="${ovrate:-$nrate}"
       mraw="${IG_MIF[$key]:-}"; can="${IG_CAN[$key]:-}"
-      total="$(awk -v t="$total" -v c="$cnt" -v r="$rate" -v mraw="$mraw" -v can="$can" -v dm="$defmif" 'BEGIN{
+      total="$(awk -v t="$total" -v c="$cnt" -v r="$rate" -v mraw="$mraw" -v can="$can" -v dm="$MAX_IN_FLIGHT" 'BEGIN{
         if (mraw=="") mif=dm;
         else if (mraw ~ /%$/) { p=mraw; sub(/%$/,"",p); mif=int((c*p+99)/100) }
         else mif=mraw+0;
@@ -324,22 +314,16 @@ done < <(om curl -s -p /api/v0/deployed/products 2>/dev/null \
           | jq -r '.[]? | [.guid, .type] | @tsv' 2>/dev/null)
 
 # Live VMs per deployment, broken down per instance group (real VMs only — errands
-# with no VM don't appear). The per-group split lets the cost model charge DB/Galera
-# nodes at the higher serial rate. IG_VMS["<dep><SEP><group>"]=count.
-declare -A VM_BY_DEP IG_VMS IG_ISDB IG_MIF IG_CAN IG_SERIAL
-declare -A DB_VMS_BY_DEP    # db-classified VMs per deployment (for reporting)
-DEPS=(); TOTAL_VMS=0; TOTAL_DB_VMS=0; N_PARALLEL_IG=0
+# with no VM don't appear). The per-group split carries the real manifest update
+# policy (max_in_flight/canaries). IG_VMS["<dep><SEP><group>"]=count.
+declare -A VM_BY_DEP IG_VMS IG_MIF IG_CAN IG_SERIAL
+DEPS=(); TOTAL_VMS=0; N_PARALLEL_IG=0
 while IFS= read -r dep; do
   [[ -z "$dep" ]] && continue
-  DEPS+=("$dep"); dep_total=0; dep_db=0
+  DEPS+=("$dep"); dep_total=0
   while IFS=$'\t' read -r cnt grp; do
     [[ -z "$grp" || ! "$cnt" =~ ^[0-9]+$ ]] && continue
     IG_VMS["${dep}${SEP}${grp}"]=$cnt
-    if grep -qiE "$DB_GROUPS_RE" <<<"$grp"; then
-      IG_ISDB["${dep}${SEP}${grp}"]=1; dep_db=$((dep_db + cnt))
-    else
-      IG_ISDB["${dep}${SEP}${grp}"]=0
-    fi
     dep_total=$((dep_total + cnt))
   done < <(bosh -d "$dep" --json vms 2>/dev/null \
             | jq -r '.Tables[0].Rows[]? | (.instance | split("/")[0])' 2>/dev/null \
@@ -353,15 +337,14 @@ while IFS= read -r dep; do
       [[ "$ser" == "false" && "${IG_VMS[${dep}${SEP}${grp}]:-0}" -gt 0 ]] && N_PARALLEL_IG=$((N_PARALLEL_IG+1))
     done < <(bosh -d "$dep" manifest 2>/dev/null | python3 -c "$PY_UPDATE" 2>/dev/null)
   fi
-  VM_BY_DEP["$dep"]=$dep_total; DB_VMS_BY_DEP["$dep"]=$dep_db
-  TOTAL_VMS=$((TOTAL_VMS + dep_total)); TOTAL_DB_VMS=$((TOTAL_DB_VMS + dep_db))
+  VM_BY_DEP["$dep"]=$dep_total
+  TOTAL_VMS=$((TOTAL_VMS + dep_total))
 done < <(bosh --json deployments 2>/dev/null | jq -r '.Tables[0].Rows[]?.name' 2>/dev/null)
 
 [[ $TOTAL_VMS -gt 0 ]] || die "Could not count any BOSH VMs — is the director reachable (source env.sh)?"
-info "Deployments: ${#VM_BY_DEP[@]} | total live VMs: ${TOTAL_VMS} (${TOTAL_DB_VMS} DB node(s) costed serially)"
+info "Deployments: ${#VM_BY_DEP[@]} | total live VMs: ${TOTAL_VMS}"
 for dep in "${DEPS[@]}"; do
-  dbnote=""; [[ "${DB_VMS_BY_DEP[$dep]:-0}" -gt 0 ]] && dbnote=", ${DB_VMS_BY_DEP[$dep]} DB"
-  info "  ${dep} (${PROD_TYPE[$dep]:-?}): ${VM_BY_DEP[$dep]} VM(s)${dbnote}"
+  info "  ${dep} (${PROD_TYPE[$dep]:-?}): ${VM_BY_DEP[$dep]} VM(s)"
 done
 [[ $HAVE_PYYAML -eq 1 && $N_PARALLEL_IG -gt 0 ]] && info "Note: ${N_PARALLEL_IG} instance group(s) have serial:false — they MAY update in parallel with peers, shortening real time below this (conservative) serial estimate."
 
@@ -449,11 +432,7 @@ else
     ptxt="${proc:+ {${proc}}}"
     # Friendly product label; empty-guid certs are foundation-global credhub CAs.
     prod="${PROD_TYPE[$pguid]:-$pguid}"; [[ "$pguid" == "-" ]] && prod="credhub-global"
-    # Operator-supplied (configurable) cert — must be obtained from Digicert.
     digitag=""
-    if [[ "$cfg" == "true" ]]; then
-      CFG_LABEL+=("$pref"); CFG_EXP+=("${vuntil:-—}"); digitag=" [requires Digicert]"
-    fi
 
     # CA rotation (3 Apply Changes) or leaf (1)? The API's rotation_procedure_name
     # is authoritative; fall back to is_ca / the label regex if it's absent.
@@ -477,6 +456,11 @@ else
       emit_sev "$sev" "CA   ${pref} [${prod}] — ${model}: $(ca_plan_text "$model" "$depname") Apply Changes${vuntil:+, expires ${vuntil}}${ptxt}${depnote}${digitag}"
     else
       N_LEAF=$((N_LEAF+1))
+      # Operator-supplied (configurable) LEAF cert — not auto-generated; a new cert
+      # must be obtained from Digicert. CAs are excluded (e.g. the opsman root CA).
+      if [[ "$cfg" == "true" ]]; then
+        CFG_LABEL+=("$pref"); CFG_EXP+=("${vuntil:-—}"); digitag=" [requires Digicert]"
+      fi
       dep="$pguid"
       if [[ -n "${VM_BY_DEP[$dep]:-}" ]]; then
         LEAF_DEPS["$dep"]=1; LEAF_BY_DEP["$dep"]=$(( ${LEAF_BY_DEP[$dep]:-0} + 1 ))
@@ -628,8 +612,8 @@ else
     printf '  %sDeferred (remove old CA)%s  : %s – %s  (later maintenance window)\n' \
       "$BOLD" "$RST" "$(fmt_min "$defer_lo")" "$(fmt_min "$defer_hi")"
   fi
-  mifsrc="$([[ $HAVE_PYYAML -eq 1 ]] && echo 'per-IG max_in_flight/canaries from bosh manifest' || echo "global fallback ${MAX_IN_FLIGHT}/${DB_MAX_IN_FLIGHT} in flight")"
-  info "Model: ${APPLY_OVERHEAD_MIN}m overhead/apply; stateless ${MIN_PER_VM_LOW}-${MIN_PER_VM_HIGH}m/VM, DB ${MIN_PER_VM_DB_LOW}-${MIN_PER_VM_DB_HIGH}m/node; ${mifsrc}. Excludes change-window/approval gaps."
+  mifsrc="$([[ $HAVE_PYYAML -eq 1 ]] && echo 'per-IG max_in_flight/canaries from bosh manifest' || echo "global fallback ${MAX_IN_FLIGHT} in flight")"
+  info "Model: ${APPLY_OVERHEAD_MIN}m overhead/apply; ${MIN_PER_VM_LOW}-${MIN_PER_VM_HIGH}m/VM; ${mifsrc}. Excludes change-window/approval gaps."
 fi
 
 # ---------------------------------------------------------------------------
@@ -637,7 +621,7 @@ fi
 # ---------------------------------------------------------------------------
 if [[ $JSON_MODE -eq 1 ]]; then
   jq -n \
-    --argjson total_vms "$TOTAL_VMS" --argjson db_vms "$TOTAL_DB_VMS" \
+    --argjson total_vms "$TOTAL_VMS" \
     --argjson leaf "$N_LEAF" --argjson ca "$N_CA" \
     --argjson crit "$N_CRIT" --argjson warn "$N_WARN" \
     --argjson leaf_vms "$LEAF_SCOPE_VMS" \
@@ -658,7 +642,7 @@ if [[ $JSON_MODE -eq 1 ]]; then
     '{
        window: $window, topology_source: $topo,
        update_policy_source: $upol, serial_false_instance_groups: $parallel_igs,
-       total_vms: $total_vms, db_vms: $db_vms,
+       total_vms: $total_vms,
        ca_batch_mode: ($batch|tonumber), leaf_folded_into_ca: ($leaf_absorbed==1),
        defer_old_ca_removal: ($defer=="1"), immediate_foundation_applies: $imm_fnd,
        expiring: { leaf: $leaf, ca: $ca, crit: $crit, warn: $warn, requires_digicert: $digicert },
@@ -692,7 +676,7 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf '| Expiring certs (%s) | %d (❌ %d · ⚠️ %d) |\n' "$HORIZON_TEXT" "$((N_LEAF+N_CA))" "$N_CRIT" "$N_WARN"
     printf '| — leaf / CA | %d / %d |\n' "$N_LEAF" "$N_CA"
     [[ ${#CFG_LABEL[@]} -gt 0 ]] && printf '| — require Digicert (operator-supplied) | %d |\n' "${#CFG_LABEL[@]}"
-    printf '| Live VMs (DB nodes) | %d (%d) |\n' "$TOTAL_VMS" "$TOTAL_DB_VMS"
+    printf '| Live VMs | %d |\n' "$TOTAL_VMS"
     printf '| One foundation-wide Apply | %s – %s |\n' "$(fmt_min "$FND_LO")" "$(fmt_min "$FND_HI")"
     printf '| **Estimated rotation time** | **%s – %s** |\n' "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")"
     [[ "$DEFER_CA_REMOVAL" == "1" && $(awk -v x="${defer_hi:-0}" 'BEGIN{print (x>0)}') -eq 1 ]] && \
@@ -776,8 +760,8 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf '| **Total** | | **%s – %s** |\n\n' "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")"
 
     printf '## Model & assumptions\n\n'
-    printf -- '- %dm overhead per Apply Changes; stateless %d–%dm/VM, DB %d–%dm/node.\n' \
-      "$APPLY_OVERHEAD_MIN" "$MIN_PER_VM_LOW" "$MIN_PER_VM_HIGH" "$MIN_PER_VM_DB_LOW" "$MIN_PER_VM_DB_HIGH"
+    printf -- '- %dm overhead per Apply Changes; %d–%dm per VM.\n' \
+      "$APPLY_OVERHEAD_MIN" "$MIN_PER_VM_LOW" "$MIN_PER_VM_HIGH"
     [[ ${#OV_PAT[@]} -gt 0 ]] && printf -- '- Manual per-IG overrides active: `%s`.\n' "$(md_esc "$IG_RATE_OVERRIDES")"
     printf -- '- A FOUNDATION CA = %d foundation-wide applies; a services TLS CA = %d foundation + %d deployment applies; a deployment CA = %d on its deployment.\n' \
       "$CA_APPLY_COUNT" "$SERVICES_CA_FND_APPLIES" "$SERVICES_CA_DEP_APPLIES" "$DEP_CA_APPLIES"
