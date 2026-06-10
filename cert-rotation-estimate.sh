@@ -72,15 +72,22 @@ CERT_WARN_WINDOW=${CERT_WARN_WINDOW:-1m}
 # `read` — see the section-2 note). Defined here because section 1 uses it too.
 SEP=$'\x1f'
 
-# Apply Changes cost model. Stateless VMs use MIN_PER_VM_*; database/Galera nodes
-# drain + resync (SST) and roll serially, so they cost more (MIN_PER_VM_DB_*).
+# Apply Changes cost model. A VM's update DURATION comes from the rate (stateless
+# MIN_PER_VM_* vs database MIN_PER_VM_DB_*, which drain + SST-resync and so cost
+# more); how many update in PARALLEL (max_in_flight) and how many canaries go first
+# come from each instance group's real BOSH `update` block when USE_MANIFEST_UPDATE
+# is on (the MAX_IN_FLIGHT/DB_MAX_IN_FLIGHT below are only the fallback when the
+# manifest can't be read). per-IG time = canaries*rate + ceil((n-canaries)/mif)*rate.
 MIN_PER_VM_LOW=${MIN_PER_VM_LOW:-4}        # fast stateless VM update
 MIN_PER_VM_HIGH=${MIN_PER_VM_HIGH:-10}     # slow stateless VM update (drain + post-start)
-MAX_IN_FLIGHT=${MAX_IN_FLIGHT:-1}          # stateless VMs updated in parallel per Apply
+MAX_IN_FLIGHT=${MAX_IN_FLIGHT:-1}          # fallback parallelism for stateless groups
 MIN_PER_VM_DB_LOW=${MIN_PER_VM_DB_LOW:-10} # DB node: drain + IST resync
 MIN_PER_VM_DB_HIGH=${MIN_PER_VM_DB_HIGH:-20} # DB node: drain + full SST resync
-DB_MAX_IN_FLIGHT=${DB_MAX_IN_FLIGHT:-1}    # clustered DBs MUST roll serially (quorum)
+DB_MAX_IN_FLIGHT=${DB_MAX_IN_FLIGHT:-1}    # fallback parallelism for DB groups
 APPLY_OVERHEAD_MIN=${APPLY_OVERHEAD_MIN:-20}   # staging/compile/migrations per Apply
+# Read real max_in_flight/canaries/serial per instance group from `bosh manifest`
+# (needs python3 + PyYAML). 0 = use the MAX_IN_FLIGHT fallbacks above instead.
+USE_MANIFEST_UPDATE=${USE_MANIFEST_UPDATE:-1}
 # Instance groups costed at the DB rate (matched on the BOSH instance-group name).
 DB_GROUPS_RE=${DB_GROUPS_RE:-'(mysql|database|galera|pxc|postgres|pgsql|rds|cockroach|^db[-_])'}
 
@@ -144,21 +151,31 @@ die(){  printf '\n%s[FATAL]%s %s\n' "$R" "$RST" "$1" >&2; exit 2; }
 fmt_min(){ awk -v m="$1" 'BEGIN{ m=int(m+0.5); h=int(m/60); r=m%60;
   if(h>0) printf "%dh %02dm", h, r; else printf "%dm", r }'; }
 # Minutes for ONE Apply Changes over the given deployments, costed per instance
-# group: DB groups roll serially at the DB rate, everything else at the stateless
-# rate. `which` selects the low or high per-VM cost. IG_VMS/IG_ISDB come from §1.
+# group. The per-VM RATE is the DB rate for database groups, else stateless. The
+# PARALLELISM (max_in_flight, possibly "N%") and canary count come from the real
+# manifest `update` block (IG_MIF/IG_CAN from §1) when present, else the global
+# fallback. per-IG = canaries*rate + ceil((n-canaries)/max_in_flight)*rate.
+# `which` selects the low or high per-VM cost.
 scope_minutes(){ # which(low|high)  dep1 [dep2 ...]
   local which=$1; shift
   local nrate drate
   if [[ "$which" == high ]]; then nrate=$MIN_PER_VM_HIGH; drate=$MIN_PER_VM_DB_HIGH
   else nrate=$MIN_PER_VM_LOW; drate=$MIN_PER_VM_DB_LOW; fi
-  local total=0 d key cnt isdb rate mif
+  local total=0 d key cnt isdb rate defmif mraw can
   for d in "$@"; do
     for key in "${!IG_VMS[@]}"; do
       [[ "$key" == "${d}${SEP}"* ]] || continue
       cnt="${IG_VMS[$key]}"; isdb="${IG_ISDB[$key]:-0}"
-      if [[ "$isdb" == "1" ]]; then rate=$drate; mif=$DB_MAX_IN_FLIGHT; else rate=$nrate; mif=$MAX_IN_FLIGHT; fi
-      total="$(awk -v t="$total" -v c="$cnt" -v m="$mif" -v r="$rate" \
-        'BEGIN{ m=(m<1?1:m); printf "%.4f", t + int((c+m-1)/m)*r }')"
+      if [[ "$isdb" == "1" ]]; then rate=$drate; defmif=$DB_MAX_IN_FLIGHT; else rate=$nrate; defmif=$MAX_IN_FLIGHT; fi
+      mraw="${IG_MIF[$key]:-}"; can="${IG_CAN[$key]:-}"
+      total="$(awk -v t="$total" -v c="$cnt" -v r="$rate" -v mraw="$mraw" -v can="$can" -v dm="$defmif" 'BEGIN{
+        if (mraw=="") mif=dm;
+        else if (mraw ~ /%$/) { p=mraw; sub(/%$/,"",p); mif=int((c*p+99)/100) }
+        else mif=mraw+0;
+        if (mif<1) mif=1;
+        cn=(can=="")?0:can+0; if(cn>c)cn=c; if(cn<0)cn=0;
+        rest=c-cn; b=(rest>0)?int((rest+mif-1)/mif):0;
+        printf "%.4f", t + cn*r + b*r }')"
     done
   done
   awk -v t="$total" -v ov="$APPLY_OVERHEAD_MIN" 'BEGIN{ printf "%.1f", ov + t }'
@@ -183,6 +200,27 @@ command -v bosh >/dev/null || die "bosh CLI not found on PATH."
 # forces the om-only path. om has no equivalent of `maestro tp`.
 HAVE_MAESTRO=0
 [[ "${USE_MAESTRO:-1}" == "1" ]] && command -v maestro >/dev/null && HAVE_MAESTRO=1
+# Per-instance-group update policy (max_in_flight/canaries/serial) from the BOSH
+# manifest needs python3 + PyYAML; without them we fall back to the global defaults.
+HAVE_PYYAML=0
+[[ "$USE_MANIFEST_UPDATE" == "1" ]] && command -v python3 >/dev/null \
+  && python3 -c 'import yaml' 2>/dev/null && HAVE_PYYAML=1
+# Emits "<ig>\t<max_in_flight>\t<canaries>\t<serial>" per instance group, applying
+# the manifest's per-IG `update` override on top of the global `update` block.
+PY_UPDATE='
+import sys, yaml
+m = yaml.safe_load(sys.stdin) or {}
+g = m.get("update") or {}
+gmif, gcan, gser = g.get("max_in_flight"), g.get("canaries"), g.get("serial")
+for ig in m.get("instance_groups", []):
+    u = ig.get("update") or {}
+    mif = u.get("max_in_flight", gmif)
+    can = u.get("canaries", gcan)
+    ser = u.get("serial", gser)
+    print("%s\t%s\t%s\t%s" % (ig.get("name",""),
+          "" if mif is None else mif, "" if can is None else can,
+          "" if ser is None else str(ser).lower()))
+'
 
 # Deployments that host the leaf certs a CA signs (union over its signed leaves),
 # via `maestro tp`. Echoes a space-separated list of live deployment names; empty
@@ -201,8 +239,9 @@ maestro_ca_deps(){ # ca-name
 
 printf '%s%sPCF Certificate Rotation Estimate%s\n' "$BOLD" "$B" "$RST"
 printf 'Run as   : %s@%s   %s\n' "$(whoami)" "$(hostname)" "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-printf 'Horizon  : certificates expiring within %s  |  topology: %s\n' \
-  "$ROTATE_WINDOW" "$([[ $HAVE_MAESTRO -eq 1 ]] && echo 'maestro tp' || echo 'om only')"
+printf 'Horizon  : certificates expiring within %s  |  topology: %s  |  update rules: %s\n' \
+  "$ROTATE_WINDOW" "$([[ $HAVE_MAESTRO -eq 1 ]] && echo 'maestro tp' || echo 'om only')" \
+  "$([[ $HAVE_PYYAML -eq 1 ]] && echo 'bosh manifest' || echo 'global fallback')"
 
 # ---------------------------------------------------------------------------
 # Convert an Ops Manager window (Nd/Nw/Nm/Ny) to days, for CA date math.
@@ -230,9 +269,9 @@ done < <(om curl -s -p /api/v0/deployed/products 2>/dev/null \
 # Live VMs per deployment, broken down per instance group (real VMs only — errands
 # with no VM don't appear). The per-group split lets the cost model charge DB/Galera
 # nodes at the higher serial rate. IG_VMS["<dep><SEP><group>"]=count.
-declare -A VM_BY_DEP IG_VMS IG_ISDB
+declare -A VM_BY_DEP IG_VMS IG_ISDB IG_MIF IG_CAN IG_SERIAL
 declare -A DB_VMS_BY_DEP    # db-classified VMs per deployment (for reporting)
-DEPS=(); TOTAL_VMS=0; TOTAL_DB_VMS=0
+DEPS=(); TOTAL_VMS=0; TOTAL_DB_VMS=0; N_PARALLEL_IG=0
 while IFS= read -r dep; do
   [[ -z "$dep" ]] && continue
   DEPS+=("$dep"); dep_total=0; dep_db=0
@@ -248,6 +287,15 @@ while IFS= read -r dep; do
   done < <(bosh -d "$dep" --json vms 2>/dev/null \
             | jq -r '.Tables[0].Rows[]? | (.instance | split("/")[0])' 2>/dev/null \
             | sort | uniq -c | awk '{print $1"\t"$2}')
+  # Real per-IG update policy from the manifest (one fetch per deployment).
+  if [[ $HAVE_PYYAML -eq 1 ]]; then
+    while IFS=$'\t' read -r grp mif can ser; do
+      [[ -z "$grp" || -z "${IG_VMS[${dep}${SEP}${grp}]:-}" ]] && continue
+      IG_MIF["${dep}${SEP}${grp}"]="$mif"; IG_CAN["${dep}${SEP}${grp}"]="$can"
+      IG_SERIAL["${dep}${SEP}${grp}"]="$ser"
+      [[ "$ser" == "false" && "${IG_VMS[${dep}${SEP}${grp}]:-0}" -gt 0 ]] && N_PARALLEL_IG=$((N_PARALLEL_IG+1))
+    done < <(bosh -d "$dep" manifest 2>/dev/null | python3 -c "$PY_UPDATE" 2>/dev/null)
+  fi
   VM_BY_DEP["$dep"]=$dep_total; DB_VMS_BY_DEP["$dep"]=$dep_db
   TOTAL_VMS=$((TOTAL_VMS + dep_total)); TOTAL_DB_VMS=$((TOTAL_DB_VMS + dep_db))
 done < <(bosh --json deployments 2>/dev/null | jq -r '.Tables[0].Rows[]?.name' 2>/dev/null)
@@ -258,6 +306,7 @@ for dep in "${DEPS[@]}"; do
   dbnote=""; [[ "${DB_VMS_BY_DEP[$dep]:-0}" -gt 0 ]] && dbnote=", ${DB_VMS_BY_DEP[$dep]} DB"
   info "  ${dep} (${PROD_TYPE[$dep]:-?}): ${VM_BY_DEP[$dep]} VM(s)${dbnote}"
 done
+[[ $HAVE_PYYAML -eq 1 && $N_PARALLEL_IG -gt 0 ]] && info "Note: ${N_PARALLEL_IG} instance group(s) have serial:false — they MAY update in parallel with peers, shortening real time below this (conservative) serial estimate."
 
 # ---------------------------------------------------------------------------
 # 2. Expiring certificates (Ops Manager deployed certs + the root CA).
@@ -463,7 +512,8 @@ else
   [[ $nt -gt 0 ]] && notetxt="  (services TLS CA = ${SERVICES_CA_FND_APPLIES} foundation + ${SERVICES_CA_DEP_APPLIES} deployment applies)"
   printf '  %sEstimated rotation time%s   : %s – %s%s\n' \
     "$BOLD" "$RST" "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")" "$notetxt"
-  info "Model: ${APPLY_OVERHEAD_MIN}m overhead/apply; stateless ${MIN_PER_VM_LOW}-${MIN_PER_VM_HIGH}m/VM (${MAX_IN_FLIGHT} in flight), DB ${MIN_PER_VM_DB_LOW}-${MIN_PER_VM_DB_HIGH}m/node (${DB_MAX_IN_FLIGHT} in flight). Excludes change-window/approval gaps."
+  mifsrc="$([[ $HAVE_PYYAML -eq 1 ]] && echo 'per-IG max_in_flight/canaries from bosh manifest' || echo "global fallback ${MAX_IN_FLIGHT}/${DB_MAX_IN_FLIGHT} in flight")"
+  info "Model: ${APPLY_OVERHEAD_MIN}m overhead/apply; stateless ${MIN_PER_VM_LOW}-${MIN_PER_VM_HIGH}m/VM, DB ${MIN_PER_VM_DB_LOW}-${MIN_PER_VM_DB_HIGH}m/node; ${mifsrc}. Excludes change-window/approval gaps."
 fi
 
 # ---------------------------------------------------------------------------
@@ -482,8 +532,11 @@ if [[ $JSON_MODE -eq 1 ]]; then
     --argjson leaf_lo "$leaf_lo" --argjson leaf_hi "$leaf_hi" \
     --arg batch "$CA_BATCH" --arg window "$ROTATE_WINDOW" \
     --arg topo "$([[ $HAVE_MAESTRO -eq 1 ]] && echo 'maestro' || echo 'om')" \
+    --arg upol "$([[ $HAVE_PYYAML -eq 1 ]] && echo 'bosh_manifest' || echo 'global_fallback')" \
+    --argjson parallel_igs "${N_PARALLEL_IG:-0}" \
     '{
        window: $window, topology_source: $topo,
+       update_policy_source: $upol, serial_false_instance_groups: $parallel_igs,
        total_vms: $total_vms, db_vms: $db_vms, ca_batched: ($batch=="1"),
        expiring: { leaf: $leaf, ca: $ca, crit: $crit, warn: $warn },
        ca_models: { foundation: $nf, services_trusted_certs: $nt, deployment: $nd },
