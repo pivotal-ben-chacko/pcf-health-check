@@ -1,7 +1,7 @@
 # PCF lab Certificate Rotation Estimate
 
 - **Director:** `192.168.2.2`
-- **Generated:** 2026-06-10 11:19:48 UTC
+- **Generated:** 2026-06-10 11:20:56 UTC
 - **Horizon:** all certificates (no expiry limit)
 - **Topology source:** `maestro tp`
 - **Update rules:** `bosh manifest` (per-IG max_in_flight/canaries)
@@ -42,10 +42,10 @@
 
 ## Leaf certificates
 
-| Deployment | Leaf certs | Apply |
-|---|---:|---|
-| `p-bosh (not VM-counted)` | 11 | folded into shared apply #2 |
-| `cf-dbe1a7580979a87638e7` | 94 | folded into shared apply #2 |
+| Deployment | Leaf certs |
+|---|---:|
+| `p-bosh (not VM-counted)` | 11 |
+| `cf-dbe1a7580979a87638e7` | 94 |
 
 ## Estimate breakdown
 
