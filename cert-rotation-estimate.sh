@@ -10,7 +10,9 @@
 #     ./cert-rotation-estimate.sh                # human output (colored)
 #     ./cert-rotation-estimate.sh --no-color     # plain text for logs
 #     ./cert-rotation-estimate.sh --json         # machine-readable summary
+#     ./cert-rotation-estimate.sh --markdown     # Markdown report (stdout only)
 #     ./cert-rotation-estimate.sh --window 90d   # plan for certs expiring <=90d
+#     IG_RATE_OVERRIDES="router=8:15" ./cert-rotation-estimate.sh  # per-IG VM time
 #
 # It is strictly READ-ONLY — it only reads cert metadata and VM counts; it never
 # rotates anything or touches the foundation.
@@ -90,6 +92,13 @@ APPLY_OVERHEAD_MIN=${APPLY_OVERHEAD_MIN:-20}   # staging/compile/migrations per 
 USE_MANIFEST_UPDATE=${USE_MANIFEST_UPDATE:-1}
 # Instance groups costed at the DB rate (matched on the BOSH instance-group name).
 DB_GROUPS_RE=${DB_GROUPS_RE:-'(mysql|database|galera|pxc|postgres|pgsql|rds|cockroach|^db[-_])'}
+# Manual per-instance-group update-time overrides — highest precedence, beats the
+# DB/stateless rates above. Space/comma-separated "pattern=low:high" (minutes);
+# pattern is a case-insensitive regex on the BOSH instance-group name, first match
+# wins. The instance group is the unit of update (all its VMs are identical), so
+# this is how you hand-set the time for a particular VM type. Parallelism still
+# comes from the manifest. e.g. IG_RATE_OVERRIDES="router=8:15 diego_cell=6:12"
+IG_RATE_OVERRIDES="${IG_RATE_OVERRIDES:-}"
 
 # Apply Changes counts per rotation kind.
 CA_APPLY_COUNT=${CA_APPLY_COUNT:-3}        # FOUNDATION CA: 3 foundation-wide applies
@@ -121,13 +130,17 @@ CA_FOUNDATION_RE=${CA_FOUNDATION_RE:-'(properties\.root_ca|properties\.nats_clie
 # ---------------------------------------------------------------------------
 # Presentation
 # ---------------------------------------------------------------------------
-NO_COLOR=0; JSON_MODE=0
+NO_COLOR=0; JSON_MODE=0; MD_MODE=0
+FOUNDATION_NAME="${FOUNDATION_NAME:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-color) NO_COLOR=1;;
     --json) JSON_MODE=1; NO_COLOR=1;;
+    --markdown|--md) MD_MODE=1; NO_COLOR=1;;
     --window) shift; ROTATE_WINDOW="${1:-$ROTATE_WINDOW}";;
     --window=*) ROTATE_WINDOW="${1#*=}";;
+    --foundation) shift; FOUNDATION_NAME="${1:-$FOUNDATION_NAME}";;
+    --foundation=*) FOUNDATION_NAME="${1#*=}";;
     -h|--help) sed -n '2,20p' "$0"; exit 0;;
   esac
   shift
@@ -137,8 +150,19 @@ if [[ -t 1 && $NO_COLOR -eq 0 ]]; then
 else
   R=""; G=""; Y=""; B=""; BOLD=""; RST=""
 fi
-# In --json mode hide human output, keep real stdout on fd 3 for the JSON doc.
-if [[ $JSON_MODE -eq 1 ]]; then exec 3>&1 1>/dev/null; fi
+# In --json / --markdown mode hide human output, keep real stdout on fd 3 for the doc.
+if [[ $JSON_MODE -eq 1 || $MD_MODE -eq 1 ]]; then exec 3>&1 1>/dev/null; fi
+# Markdown report buffers (accumulated during the run, rendered at the end).
+MD_INV=""; MD_CERTS=""; MD_CAPLAN=""
+md_esc(){ local s="${1//|/\\|}"; printf '%s' "${s//$'\n'/ }"; }   # escape table cells
+
+# Parse IG_RATE_OVERRIDES ("pattern=low:high ...") into parallel arrays.
+OV_PAT=(); OV_LO=(); OV_HI=()
+for _ent in ${IG_RATE_OVERRIDES//,/ }; do
+  [[ "$_ent" == *=*:* ]] || continue
+  _rng="${_ent#*=}"
+  OV_PAT+=("${_ent%%=*}"); OV_LO+=("${_rng%%:*}"); OV_HI+=("${_rng##*:}")
+done
 
 section(){ printf '\n%s%s== %s ==%s\n' "$BOLD" "$B" "$1" "$RST"; }
 ok(){   printf '  %s[ OK ]%s %s\n' "$G" "$RST" "$1"; }
@@ -161,12 +185,20 @@ scope_minutes(){ # which(low|high)  dep1 [dep2 ...]
   local nrate drate
   if [[ "$which" == high ]]; then nrate=$MIN_PER_VM_HIGH; drate=$MIN_PER_VM_DB_HIGH
   else nrate=$MIN_PER_VM_LOW; drate=$MIN_PER_VM_DB_LOW; fi
-  local total=0 d key cnt isdb rate defmif mraw can
+  local total=0 d key grp cnt isdb rate defmif mraw can ovrate oi
   for d in "$@"; do
     for key in "${!IG_VMS[@]}"; do
       [[ "$key" == "${d}${SEP}"* ]] || continue
-      cnt="${IG_VMS[$key]}"; isdb="${IG_ISDB[$key]:-0}"
-      if [[ "$isdb" == "1" ]]; then rate=$drate; defmif=$DB_MAX_IN_FLIGHT; else rate=$nrate; defmif=$MAX_IN_FLIGHT; fi
+      grp="${key#*$SEP}"; cnt="${IG_VMS[$key]}"; isdb="${IG_ISDB[$key]:-0}"
+      # rate precedence: manual IG override > DB rate > stateless rate.
+      ovrate=""
+      for oi in "${!OV_PAT[@]}"; do
+        grep -qiE "${OV_PAT[$oi]}" <<<"$grp" || continue
+        ovrate="$([[ "$which" == high ]] && echo "${OV_HI[$oi]}" || echo "${OV_LO[$oi]}")"; break
+      done
+      if   [[ -n "$ovrate" ]]; then rate=$ovrate;  defmif=$MAX_IN_FLIGHT
+      elif [[ "$isdb" == "1" ]]; then rate=$drate; defmif=$DB_MAX_IN_FLIGHT
+      else rate=$nrate; defmif=$MAX_IN_FLIGHT; fi
       mraw="${IG_MIF[$key]:-}"; can="${IG_CAN[$key]:-}"
       total="$(awk -v t="$total" -v c="$cnt" -v r="$rate" -v mraw="$mraw" -v can="$can" -v dm="$defmif" 'BEGIN{
         if (mraw=="") mif=dm;
@@ -344,8 +376,9 @@ certs_tsv="$(om curl -s -p "/api/v0/deployed/certificates?expires_within=${ROTAT
 # Accumulators for the estimate.
 N_LEAF=0; N_CA=0; N_CRIT=0; N_WARN=0
 declare -A LEAF_DEPS         # deployment -> 1, deployments touched by leaf rotations
-# Parallel CA record arrays, one entry per CA rotation (consumed by §3).
-CA_MODEL=(); CA_DEP=(); CA_LABEL=()
+declare -A LEAF_BY_DEP       # deployment -> leaf-cert count (for the markdown report)
+# Parallel CA record arrays, one entry per CA rotation (consumed by §3 / report).
+CA_MODEL=(); CA_DEP=(); CA_LABEL=(); CA_SEV=(); CA_EXP=()
 
 emit_sev(){ # level message  -> calls the right logger and bumps counters
   case "$1" in CRIT) crit "$2"; N_CRIT=$((N_CRIT+1));;
@@ -402,12 +435,19 @@ else
         elif [[ -n "${VM_BY_DEP[$pguid]:-}" ]]; then dep="$pguid"
         else depnote=" (owning deployment unknown — leaf-regen costed foundation-wide)"; fi
       fi
-      CA_MODEL+=("$model"); CA_DEP+=("$dep"); CA_LABEL+=("$pref")
+      CA_MODEL+=("$model"); CA_DEP+=("$dep"); CA_LABEL+=("$pref"); CA_SEV+=("$sev"); CA_EXP+=("${vuntil:-—}")
       depname="$dep"; [[ "$dep" == "__FND__" ]] && depname="foundation"; depname="${depname// /, }"
       emit_sev "$sev" "CA   ${pref} [${prod}] — ${model}: $(ca_plan_text "$model" "$depname") Apply Changes${vuntil:+, expires ${vuntil}}${ptxt}${depnote}"
     else
       N_LEAF=$((N_LEAF+1))
-      dep="$pguid"; [[ -n "${VM_BY_DEP[$dep]:-}" ]] && LEAF_DEPS["$dep"]=1
+      dep="$pguid"
+      if [[ -n "${VM_BY_DEP[$dep]:-}" ]]; then
+        LEAF_DEPS["$dep"]=1; LEAF_BY_DEP["$dep"]=$(( ${LEAF_BY_DEP[$dep]:-0} + 1 ))
+      else
+        # e.g. the BOSH director's own certs (p-bosh) — not a countable deployment,
+        # so excluded from the leaf cost scope; tallied separately for the report.
+        LEAF_BY_DEP["${prod} (not VM-counted)"]=$(( ${LEAF_BY_DEP["${prod} (not VM-counted)"]:-0} + 1 ))
+      fi
       vmc="${VM_BY_DEP[$dep]:-?}"
       emit_sev "$sev" "leaf ${pref} [${prod}] — ${dep} (${vmc} VMs, ${LEAF_APPLY_COUNT}x Apply Changes)${vuntil:+, expires ${vuntil}}${ptxt}"
     fi
@@ -422,11 +462,12 @@ while IFS=$'\t' read -r guid active expires; do
   days=$(( (exp_epoch - NOW_EPOCH) / 86400 ))
   [[ $days -gt $HORIZON_DAYS ]] && continue
   N_CA=$((N_CA+1))
-  CA_MODEL+=("FOUNDATION"); CA_DEP+=("__FND__"); CA_LABEL+=("opsman-root-ca:${guid:0:8}")
+  rsev="INFO"
+  if   [[ $days -le $(window_days "$CERT_CRIT_WINDOW") ]]; then rsev="CRIT"
+  elif [[ $days -le $(window_days "$CERT_WARN_WINDOW") ]]; then rsev="WARN"; fi
+  CA_MODEL+=("FOUNDATION"); CA_DEP+=("__FND__"); CA_LABEL+=("opsman-root-ca:${guid:0:8}"); CA_SEV+=("$rsev"); CA_EXP+=("$expires")
   msg="Ops Manager ROOT CA ${guid:0:8}… expires in ${days}d (${expires}) — FOUNDATION: ${CA_APPLY_COUNT}x foundation-wide Apply Changes over ${TOTAL_VMS} VMs"
-  if   [[ $days -le $(window_days "$CERT_CRIT_WINDOW") ]]; then crit "$msg"; N_CRIT=$((N_CRIT+1))
-  elif [[ $days -le $(window_days "$CERT_WARN_WINDOW") ]]; then warn "$msg"; N_WARN=$((N_WARN+1))
-  else info "$msg"; fi
+  case "$rsev" in CRIT) crit "$msg"; N_CRIT=$((N_CRIT+1));; WARN) warn "$msg"; N_WARN=$((N_WARN+1));; *) info "$msg";; esac
 done < <(om curl -s -p /api/v0/certificate_authorities 2>/dev/null \
           | jq -r '.certificate_authorities[]? | [.guid, .active, (.expires_on // "")] | @tsv' 2>/dev/null)
 
@@ -547,6 +588,81 @@ if [[ $JSON_MODE -eq 1 ]]; then
                            total:{ low: $lo,      high: $hi } },
        estimate_human: { low: "'"$(fmt_min "$TOTAL_LO")"'", high: "'"$(fmt_min "$TOTAL_HI")"'" }
      }' >&3
+fi
+
+# ---------------------------------------------------------------------------
+# Markdown report. Written to the real stdout (fd 3) in --markdown mode.
+# ---------------------------------------------------------------------------
+if [[ $MD_MODE -eq 1 ]]; then
+  badge(){ case "$1" in CRIT) printf '❌ CRIT';; WARN) printf '⚠️ WARN';; *) printf 'ℹ️ info';; esac; }
+  title="PCF${FOUNDATION_NAME:+ $FOUNDATION_NAME} Certificate Rotation Estimate"
+  {
+    printf '# %s\n\n' "$title"
+    printf '- **Director:** `%s`\n' "${BOSH_ENVIRONMENT:-?}"
+    printf '- **Generated:** %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    printf '- **Horizon:** certificates expiring within `%s`\n' "$ROTATE_WINDOW"
+    printf '- **Topology source:** %s\n' "$([[ $HAVE_MAESTRO -eq 1 ]] && echo '`maestro tp`' || echo 'om only')"
+    printf '- **Update rules:** %s\n\n' "$([[ $HAVE_PYYAML -eq 1 ]] && echo '`bosh manifest` (per-IG max_in_flight/canaries)' || echo 'global fallback')"
+
+    printf '## Summary\n\n'
+    printf '| Metric | Value |\n|---|---|\n'
+    printf '| Expiring certs (≤ %s) | %d (❌ %d · ⚠️ %d) |\n' "$ROTATE_WINDOW" "$((N_LEAF+N_CA))" "$N_CRIT" "$N_WARN"
+    printf '| — leaf / CA | %d / %d |\n' "$N_LEAF" "$N_CA"
+    printf '| Live VMs (DB nodes) | %d (%d) |\n' "$TOTAL_VMS" "$TOTAL_DB_VMS"
+    printf '| One foundation-wide Apply | %s – %s |\n' "$(fmt_min "$FND_LO")" "$(fmt_min "$FND_HI")"
+    printf '| **Estimated rotation time** | **%s – %s** |\n\n' "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")"
+
+    printf '## Foundation inventory\n\n'
+    printf '| Deployment | Type | VMs | DB nodes |\n|---|---|---:|---:|\n'
+    for dep in "${DEPS[@]}"; do
+      printf '| `%s` | %s | %d | %d |\n' "$(md_esc "$dep")" "${PROD_TYPE[$dep]:-?}" "${VM_BY_DEP[$dep]:-0}" "${DB_VMS_BY_DEP[$dep]:-0}"
+    done
+    [[ ${N_PARALLEL_IG:-0} -gt 0 ]] && printf '\n> %d instance group(s) have `serial:false` — they may update in parallel, so real time can come in under the (conservative serial) estimate.\n' "$N_PARALLEL_IG"
+    printf '\n'
+
+    if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
+      printf '## CA rotations (3-phase)\n\n'
+      printf '| CA | Scope model | Apply plan | Expires | Severity |\n|---|---|---|---|---|\n'
+      for i in "${!CA_MODEL[@]}"; do
+        dn="${CA_DEP[$i]}"; [[ "$dn" == "__FND__" ]] && dn="foundation"; dn="${dn// /, }"
+        printf '| `%s` | %s | %s | %s | %s |\n' \
+          "$(md_esc "${CA_LABEL[$i]}")" "${CA_MODEL[$i]}" \
+          "$(md_esc "$(ca_plan_text "${CA_MODEL[$i]}" "$dn")")" "${CA_EXP[$i]}" "$(badge "${CA_SEV[$i]}")"
+      done
+      printf '\n'
+    fi
+
+    if [[ $N_LEAF -gt 0 ]]; then
+      printf '## Leaf certificates (1-phase)\n\n'
+      printf '| Deployment | Leaf certs | Apply |\n|---|---:|---|\n'
+      for dep in "${!LEAF_BY_DEP[@]}"; do
+        printf '| `%s` | %d | 1× (with the leaf campaign) |\n' "$(md_esc "$dep")" "${LEAF_BY_DEP[$dep]}"
+      done
+      printf '\n'
+    fi
+
+    printf '## Estimate breakdown\n\n'
+    printf '| Campaign | Applies | Time (low – high) |\n|---|---|---|\n'
+    [[ $N_LEAF -gt 0 ]] && printf '| Leaf certs | %d× over %d deployment(s) | %s – %s |\n' \
+      "$LEAF_APPLY_COUNT" "${#LEAF_BY_DEP[@]}" "$(fmt_min "$leaf_lo")" "$(fmt_min "$leaf_hi")"
+    if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
+      if [[ "$CA_BATCH" == "1" ]]; then
+        printf '| CA certs (batched) | %d× foundation-wide + per-deployment leaf-regen | %s – %s |\n' \
+          "$max_fnd_phases" "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")"
+      else
+        printf '| CA certs (un-batched) | each CA costed separately | %s – %s |\n' "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")"
+      fi
+    fi
+    printf '| **Total** | | **%s – %s** |\n\n' "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")"
+
+    printf '## Model & assumptions\n\n'
+    printf '- %dm overhead per Apply Changes; stateless %d–%dm/VM, DB %d–%dm/node.\n' \
+      "$APPLY_OVERHEAD_MIN" "$MIN_PER_VM_LOW" "$MIN_PER_VM_HIGH" "$MIN_PER_VM_DB_LOW" "$MIN_PER_VM_DB_HIGH"
+    [[ ${#OV_PAT[@]} -gt 0 ]] && printf '- Manual per-IG overrides active: `%s`.\n' "$(md_esc "$IG_RATE_OVERRIDES")"
+    printf '- A FOUNDATION CA = %d foundation-wide applies; a services TLS CA = %d foundation + %d deployment applies; a deployment CA = %d on its deployment.\n' \
+      "$CA_APPLY_COUNT" "$SERVICES_CA_FND_APPLIES" "$SERVICES_CA_DEP_APPLIES" "$DEP_CA_APPLIES"
+    printf '- Estimate is **Apply Changes compute time only** — it excludes change-window / approval gaps between phases, which often dominate the wall-clock for CA rotations.\n'
+  } >&3
 fi
 
 # Exit status mirrors the health check: 0 clean, 1 warnings, 2 criticals.
