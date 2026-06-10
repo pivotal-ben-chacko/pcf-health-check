@@ -11,7 +11,8 @@
 #     ./cert-rotation-estimate.sh --no-color     # plain text for logs
 #     ./cert-rotation-estimate.sh --json         # machine-readable summary
 #     ./cert-rotation-estimate.sh --markdown     # Markdown report (stdout only)
-#     ./cert-rotation-estimate.sh --window 90d   # plan for certs expiring <=90d
+#     ./cert-rotation-estimate.sh --days 90      # plan for certs expiring <=90 days
+#     ./cert-rotation-estimate.sh --window 90d   # same, Ops Manager window syntax
 #     IG_RATE_OVERRIDES="router=8:15" ./cert-rotation-estimate.sh  # per-IG VM time
 #
 # It is strictly READ-ONLY — it only reads cert metadata and VM counts; it never
@@ -64,8 +65,9 @@ set -uo pipefail
 # Tunables (override via env). Times are in minutes.
 # ---------------------------------------------------------------------------
 # Planning horizon: certs expiring within this are candidates for rotation.
-# Ops Manager 'expires_within' syntax — Nd / Nw / Nm / Ny (e.g. 90d, 1m, 1y).
-ROTATE_WINDOW=${ROTATE_WINDOW:-1y}
+# Default "all" = no horizon limit (every deployed cert). Narrow it with --days N,
+# --window <Nd|Nw|Nm|Ny> (Ops Manager 'expires_within' syntax), or ROTATE_WINDOW.
+ROTATE_WINDOW=${ROTATE_WINDOW:-all}
 # Severity windows inside the planning horizon.
 CERT_CRIT_WINDOW=${CERT_CRIT_WINDOW:-1w}
 CERT_WARN_WINDOW=${CERT_WARN_WINDOW:-1m}
@@ -110,9 +112,23 @@ SERVICES_CA_FND_APPLIES=${SERVICES_CA_FND_APPLIES:-2}   # the add + the remove
 SERVICES_CA_DEP_APPLIES=${SERVICES_CA_DEP_APPLIES:-1}   # the leaf regeneration
 DEP_CA_APPLIES=${DEP_CA_APPLIES:-3}        # DEPLOYMENT-scoped CA: 3 applies on its dep
 
-# Batch all CA rotations into one campaign (1, default — the foundation-wide
-# add/remove applies are shared across every CA) or cost each CA separately (0).
-CA_BATCH=${CA_BATCH:-1}
+# How CA rotations share Apply Changes:
+#   0 = none: every CA costed in full, separately (worst case).
+#   1 = default: the foundation-wide add/remove applies are shared across CAs, but
+#       each deployment-scoped CA still costs its own applies.
+#   2 = full (default): ONE shared 3-phase campaign on all tiles — generate all new
+#       CAs (apply 1), regenerate all leaves incl. the leaf certs (apply 2), delete
+#       all old CAs (apply 3). Deployment-scoped CAs and the leaf campaign fold into
+#       those foundation-wide applies (a foundation apply recreates every VM anyway),
+#       so the whole rotation is just `max_fnd_phases` foundation-wide applies.
+CA_BATCH=${CA_BATCH:-2}
+
+# Defer the old-CA removal: add the new CA to the BOSH trusted certs and regenerate
+# leaves now; remove the OLD CA from trusted certs in a later maintenance window.
+# OFF by default (0) — the estimate includes all 3 phases. Turn on with the --defer
+# flag (or DEFER_CA_REMOVAL=1): the final foundation-wide "remove" Apply Changes is
+# split out of the immediate estimate and reported as a deferred follow-up.
+DEFER_CA_REMOVAL=${DEFER_CA_REMOVAL:-0}
 
 # --- CA classification -----------------------------------------------------
 # The deployed-certificates API names the rotation procedure per cert; a procedure
@@ -139,6 +155,11 @@ while [[ $# -gt 0 ]]; do
     --markdown|--md) MD_MODE=1; NO_COLOR=1;;
     --window) shift; ROTATE_WINDOW="${1:-$ROTATE_WINDOW}";;
     --window=*) ROTATE_WINDOW="${1#*=}";;
+    --days) shift; ROTATE_WINDOW="${1:-0}d";;
+    --days=*) ROTATE_WINDOW="${1#*=}d";;
+    --all) ROTATE_WINDOW="all";;
+    --defer) DEFER_CA_REMOVAL=1;;
+    --no-defer) DEFER_CA_REMOVAL=0;;
     --foundation) shift; FOUNDATION_NAME="${1:-$FOUNDATION_NAME}";;
     --foundation=*) FOUNDATION_NAME="${1#*=}";;
     -h|--help) sed -n '2,20p' "$0"; exit 0;;
@@ -271,14 +292,18 @@ maestro_ca_deps(){ # ca-name
 
 printf '%s%sPCF Certificate Rotation Estimate%s\n' "$BOLD" "$B" "$RST"
 printf 'Run as   : %s@%s   %s\n' "$(whoami)" "$(hostname)" "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+# "all" / "infinite" = no horizon limit; everything else is an Ops Manager window.
+WINDOW_IS_ALL=0; [[ "$ROTATE_WINDOW" == "all" || "$ROTATE_WINDOW" == "infinite" ]] && WINDOW_IS_ALL=1
+HORIZON_TEXT="$([[ $WINDOW_IS_ALL -eq 1 ]] && echo 'all (no limit)' || echo "$ROTATE_WINDOW")"
 printf 'Horizon  : certificates expiring within %s  |  topology: %s  |  update rules: %s\n' \
-  "$ROTATE_WINDOW" "$([[ $HAVE_MAESTRO -eq 1 ]] && echo 'maestro tp' || echo 'om only')" \
+  "$HORIZON_TEXT" "$([[ $HAVE_MAESTRO -eq 1 ]] && echo 'maestro tp' || echo 'om only')" \
   "$([[ $HAVE_PYYAML -eq 1 ]] && echo 'bosh manifest' || echo 'global fallback')"
 
 # ---------------------------------------------------------------------------
-# Convert an Ops Manager window (Nd/Nw/Nm/Ny) to days, for CA date math.
+# Convert an Ops Manager window (Nd/Nw/Nm/Ny, or all) to days, for CA date math.
 # ---------------------------------------------------------------------------
 window_days(){ awk -v w="$1" 'BEGIN{
+  if (w=="all" || w=="infinite" || w=="") { print 3650000; exit }   # effectively infinite
   n=w; sub(/[a-zA-Z]+$/,"",n); u=w; sub(/^[0-9]+/,"",u);
   if(u=="w") n=n*7; else if(u=="m") n=n*30; else if(u=="y") n=n*365;
   printf "%d", n }'; }
@@ -343,7 +368,7 @@ done
 # ---------------------------------------------------------------------------
 # 2. Expiring certificates (Ops Manager deployed certs + the root CA).
 # ---------------------------------------------------------------------------
-section "2. Expiring certificates (<= ${ROTATE_WINDOW})"
+section "2. Expiring certificates ($([[ $WINDOW_IS_ALL -eq 1 ]] && echo 'all' || echo "<= ${ROTATE_WINDOW}"))"
 
 # Severity membership: keys (product_guid|property_reference) that fall in the
 # tighter crit/warn windows. The unfiltered list has null dates on this opsman,
@@ -367,7 +392,10 @@ warn_keys="$(om curl -s -p "/api/v0/deployed/certificates?expires_within=${CERT_
 
 # Planning set: everything expiring within the horizon, with the metadata we need.
 # The API names the rotation procedure per cert — that's what tells leaf from CA.
-certs_tsv="$(om curl -s -p "/api/v0/deployed/certificates?expires_within=${ROTATE_WINDOW}" 2>/dev/null \
+# With "all", drop the expires_within filter and take every deployed certificate.
+CERT_QUERY="/api/v0/deployed/certificates"
+[[ $WINDOW_IS_ALL -eq 1 ]] || CERT_QUERY="${CERT_QUERY}?expires_within=${ROTATE_WINDOW}"
+certs_tsv="$(om curl -s -p "$CERT_QUERY" 2>/dev/null \
   | jq -r "${JQ_DEFS} .certificates[]? | [
         gid, (.is_ca // false | tostring), lbl,
         (.location|c), (.valid_until // \"\"), (.rotation_procedure_name // \"\")
@@ -518,30 +546,58 @@ for i in "${!CA_MODEL[@]}"; do
   nonbatch_hi="$(awk -v a="$nonbatch_hi" -v f="$fph" -v fp="$FND_HI" -v d="$dph" -v p="$od_hi" 'BEGIN{printf "%.4f", a+f*fp+d*p}')"
 done
 
-ca_lo=0; ca_hi=0
+# Deferred removal: the final foundation-wide "remove old CA from trusted certs"
+# apply can be done in a later window. Pull it out of the immediate foundation
+# phases (batched modes only) and report it as a follow-up.
+imm_fnd=$max_fnd_phases; defer_lo=0; defer_hi=0
+if [[ "$DEFER_CA_REMOVAL" == "1" && "$CA_BATCH" != "0" && $max_fnd_phases -gt 0 ]]; then
+  imm_fnd=$((max_fnd_phases - 1)); defer_lo="$FND_LO"; defer_hi="$FND_HI"
+fi
+
+ca_lo=0; ca_hi=0; leaf_absorbed=0
 if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
-  if [[ "$CA_BATCH" == "1" ]]; then
-    ca_lo="$(awk -v f="$max_fnd_phases" -v fp="$FND_LO" -v d="$ca_dep_lo" 'BEGIN{printf "%.1f", f*fp+d}')"
-    ca_hi="$(awk -v f="$max_fnd_phases" -v fp="$FND_HI" -v d="$ca_dep_hi" 'BEGIN{printf "%.1f", f*fp+d}')"
-  else
+  if [[ "$CA_BATCH" == "0" ]]; then
     ca_lo="$(awk -v x="$nonbatch_lo" 'BEGIN{printf "%.1f", x}')"
     ca_hi="$(awk -v x="$nonbatch_hi" 'BEGIN{printf "%.1f", x}')"
+  elif [[ "$CA_BATCH" == "2" && $max_fnd_phases -gt 0 ]]; then
+    # Full batch: one shared campaign on all tiles. Add all new CAs + regen all
+    # leaves (incl. leaf certs) fold into the immediate foundation-wide applies;
+    # the old-CA removal is the deferred apply when DEFER_CA_REMOVAL=1.
+    ca_lo="$(awk -v f="$imm_fnd" -v fp="$FND_LO" 'BEGIN{printf "%.1f", f*fp}')"
+    ca_hi="$(awk -v f="$imm_fnd" -v fp="$FND_HI" 'BEGIN{printf "%.1f", f*fp}')"
+    leaf_absorbed=1
+  else
+    # Shared foundation applies; deployment-scoped CAs costed on top (also the
+    # CA_BATCH=2 fallback when there is no foundation-wide apply to fold into).
+    ca_lo="$(awk -v f="$imm_fnd" -v fp="$FND_LO" -v d="$ca_dep_lo" 'BEGIN{printf "%.1f", f*fp+d}')"
+    ca_hi="$(awk -v f="$imm_fnd" -v fp="$FND_HI" -v d="$ca_dep_hi" 'BEGIN{printf "%.1f", f*fp+d}')"
   fi
   info "CA certs: ${#CA_MODEL[@]} — ${nf} foundation, ${nt} services/trusted-certs, ${nd} deployment-scoped"
   for i in "${!CA_MODEL[@]}"; do
     dn="${CA_DEP[$i]}"; [[ "$dn" == "__FND__" ]] && dn="foundation"; dn="${dn// /, }"
     info "  - ${CA_LABEL[$i]} [${CA_MODEL[$i]}]: $(ca_plan_text "${CA_MODEL[$i]}" "$dn") Apply Changes"
   done
-  if [[ "$CA_BATCH" == "1" ]]; then
-    info "  Batched: ${max_fnd_phases}x shared foundation-wide Apply ($(fmt_min "$FND_LO")–$(fmt_min "$FND_HI") each, ${TOTAL_VMS} VMs) + per-deployment leaf-regen"
-  else
-    info "  Un-batched: each CA's foundation applies costed separately"
-  fi
+  case "$CA_BATCH" in
+    0) info "  Un-batched: each CA's foundation applies costed separately";;
+    2) if [[ $leaf_absorbed -eq 1 ]]; then
+         info "  Full batch: ${imm_fnd}x foundation-wide Apply on all tiles ($(fmt_min "$FND_LO")–$(fmt_min "$FND_HI") each, ${TOTAL_VMS} VMs) — all CAs + leaf regen folded in"
+       else
+         info "  Full batch requested but no foundation-wide apply present — costing per-deployment instead"
+       fi;;
+    *) info "  Batched: ${imm_fnd}x shared foundation-wide Apply ($(fmt_min "$FND_LO")–$(fmt_min "$FND_HI") each, ${TOTAL_VMS} VMs) + per-deployment leaf-regen";;
+  esac
   info "  => $(fmt_min "$ca_lo") – $(fmt_min "$ca_hi")"
+  if [[ "$DEFER_CA_REMOVAL" == "1" && $(awk -v x="$defer_hi" 'BEGIN{print (x>0)}') -eq 1 ]]; then
+    info "  Deferred (later window): 1x foundation-wide Apply to remove the old CA(s) from trusted certs => $(fmt_min "$defer_lo") – $(fmt_min "$defer_hi")"
+  fi
 fi
 
-TOTAL_LO="$(awk -v a="$leaf_lo" -v b="$ca_lo" 'BEGIN{printf "%.1f", a+b}')"
-TOTAL_HI="$(awk -v a="$leaf_hi" -v b="$ca_hi" 'BEGIN{printf "%.1f", a+b}')"
+# In a full batch the leaf-cert regen rides the shared foundation apply (#2), so it
+# adds nothing on top; otherwise it's its own campaign.
+leaf_total_lo="$leaf_lo"; leaf_total_hi="$leaf_hi"
+[[ $leaf_absorbed -eq 1 ]] && { leaf_total_lo=0; leaf_total_hi=0; }
+TOTAL_LO="$(awk -v a="$leaf_total_lo" -v b="$ca_lo" 'BEGIN{printf "%.1f", a+b}')"
+TOTAL_HI="$(awk -v a="$leaf_total_hi" -v b="$ca_hi" 'BEGIN{printf "%.1f", a+b}')"
 
 section "Summary"
 printf '  %sExpiring certs in horizon%s : %d (CRIT %d · WARN %d) — %d leaf, %d CA\n' \
@@ -550,9 +606,17 @@ if [[ $((N_LEAF+N_CA)) -eq 0 ]]; then
   ok "Nothing to rotate within ${ROTATE_WINDOW}."
 else
   notetxt=""
-  [[ $nt -gt 0 ]] && notetxt="  (services TLS CA = ${SERVICES_CA_FND_APPLIES} foundation + ${SERVICES_CA_DEP_APPLIES} deployment applies)"
+  if [[ "${leaf_absorbed:-0}" -eq 1 ]]; then
+    notetxt="  (full batch: all ${N_CA} CA(s) + ${N_LEAF} leaf cert(s) in ${imm_fnd} foundation-wide applies)"
+  elif [[ $nt -gt 0 ]]; then
+    notetxt="  (services TLS CA = ${SERVICES_CA_FND_APPLIES} foundation + ${SERVICES_CA_DEP_APPLIES} deployment applies)"
+  fi
   printf '  %sEstimated rotation time%s   : %s – %s%s\n' \
     "$BOLD" "$RST" "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")" "$notetxt"
+  if [[ "$DEFER_CA_REMOVAL" == "1" && $(awk -v x="$defer_hi" 'BEGIN{print (x>0)}') -eq 1 ]]; then
+    printf '  %sDeferred (remove old CA)%s  : %s – %s  (later maintenance window)\n' \
+      "$BOLD" "$RST" "$(fmt_min "$defer_lo")" "$(fmt_min "$defer_hi")"
+  fi
   mifsrc="$([[ $HAVE_PYYAML -eq 1 ]] && echo 'per-IG max_in_flight/canaries from bosh manifest' || echo "global fallback ${MAX_IN_FLIGHT}/${DB_MAX_IN_FLIGHT} in flight")"
   info "Model: ${APPLY_OVERHEAD_MIN}m overhead/apply; stateless ${MIN_PER_VM_LOW}-${MIN_PER_VM_HIGH}m/VM, DB ${MIN_PER_VM_DB_LOW}-${MIN_PER_VM_DB_HIGH}m/node; ${mifsrc}. Excludes change-window/approval gaps."
 fi
@@ -575,17 +639,24 @@ if [[ $JSON_MODE -eq 1 ]]; then
     --arg topo "$([[ $HAVE_MAESTRO -eq 1 ]] && echo 'maestro' || echo 'om')" \
     --arg upol "$([[ $HAVE_PYYAML -eq 1 ]] && echo 'bosh_manifest' || echo 'global_fallback')" \
     --argjson parallel_igs "${N_PARALLEL_IG:-0}" \
+    --argjson leaf_absorbed "${leaf_absorbed:-0}" \
+    --argjson imm_fnd "${imm_fnd:-0}" \
+    --argjson defer_lo "${defer_lo:-0}" --argjson defer_hi "${defer_hi:-0}" \
+    --arg defer "$DEFER_CA_REMOVAL" \
     '{
        window: $window, topology_source: $topo,
        update_policy_source: $upol, serial_false_instance_groups: $parallel_igs,
-       total_vms: $total_vms, db_vms: $db_vms, ca_batched: ($batch=="1"),
+       total_vms: $total_vms, db_vms: $db_vms,
+       ca_batch_mode: ($batch|tonumber), leaf_folded_into_ca: ($leaf_absorbed==1),
+       defer_old_ca_removal: ($defer=="1"), immediate_foundation_applies: $imm_fnd,
        expiring: { leaf: $leaf, ca: $ca, crit: $crit, warn: $warn },
        ca_models: { foundation: $nf, services_trusted_certs: $nt, deployment: $nd },
        shared_foundation_applies: $fnd_phases,
        leaf_scope_vms: $leaf_vms,
        estimate_minutes: { leaf: { low: $leaf_lo, high: $leaf_hi },
                            ca:   { low: $ca_lo,   high: $ca_hi },
-                           total:{ low: $lo,      high: $hi } },
+                           total:{ low: $lo,      high: $hi },
+                           deferred_removal: { low: $defer_lo, high: $defer_hi } },
        estimate_human: { low: "'"$(fmt_min "$TOTAL_LO")"'", high: "'"$(fmt_min "$TOTAL_HI")"'" }
      }' >&3
 fi
@@ -600,17 +671,20 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf '# %s\n\n' "$title"
     printf -- '- **Director:** `%s`\n' "${BOSH_ENVIRONMENT:-?}"
     printf -- '- **Generated:** %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-    printf -- '- **Horizon:** certificates expiring within `%s`\n' "$ROTATE_WINDOW"
+    printf -- '- **Horizon:** %s\n' "$([[ $WINDOW_IS_ALL -eq 1 ]] && echo 'all certificates (no expiry limit)' || echo "certificates expiring within \`${ROTATE_WINDOW}\`")"
     printf -- '- **Topology source:** %s\n' "$([[ $HAVE_MAESTRO -eq 1 ]] && echo '`maestro tp`' || echo 'om only')"
     printf -- '- **Update rules:** %s\n\n' "$([[ $HAVE_PYYAML -eq 1 ]] && echo '`bosh manifest` (per-IG max_in_flight/canaries)' || echo 'global fallback')"
 
     printf '## Summary\n\n'
     printf '| Metric | Value |\n|---|---|\n'
-    printf '| Expiring certs (≤ %s) | %d (❌ %d · ⚠️ %d) |\n' "$ROTATE_WINDOW" "$((N_LEAF+N_CA))" "$N_CRIT" "$N_WARN"
+    printf '| Expiring certs (%s) | %d (❌ %d · ⚠️ %d) |\n' "$HORIZON_TEXT" "$((N_LEAF+N_CA))" "$N_CRIT" "$N_WARN"
     printf '| — leaf / CA | %d / %d |\n' "$N_LEAF" "$N_CA"
     printf '| Live VMs (DB nodes) | %d (%d) |\n' "$TOTAL_VMS" "$TOTAL_DB_VMS"
     printf '| One foundation-wide Apply | %s – %s |\n' "$(fmt_min "$FND_LO")" "$(fmt_min "$FND_HI")"
-    printf '| **Estimated rotation time** | **%s – %s** |\n\n' "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")"
+    printf '| **Estimated rotation time** | **%s – %s** |\n' "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")"
+    [[ "$DEFER_CA_REMOVAL" == "1" && $(awk -v x="${defer_hi:-0}" 'BEGIN{print (x>0)}') -eq 1 ]] && \
+      printf '| Deferred old-CA removal (later) | %s – %s |\n' "$(fmt_min "$defer_lo")" "$(fmt_min "$defer_hi")"
+    printf '\n'
 
     printf '## Foundation inventory\n\n'
     printf '| Deployment | Type | VMs | DB nodes |\n|---|---|---:|---:|\n'
@@ -622,36 +696,47 @@ if [[ $MD_MODE -eq 1 ]]; then
 
     if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
       printf '## CA rotations (3-phase)\n\n'
-      printf '| CA | Scope model | Apply plan | Expires | Severity |\n|---|---|---|---|---|\n'
+      printf '| Certificate | Expires | Severity |\n|---|---|---|\n'
       for i in "${!CA_MODEL[@]}"; do
-        dn="${CA_DEP[$i]}"; [[ "$dn" == "__FND__" ]] && dn="foundation"; dn="${dn// /, }"
-        printf '| `%s` | %s | %s | %s | %s |\n' \
-          "$(md_esc "${CA_LABEL[$i]}")" "${CA_MODEL[$i]}" \
-          "$(md_esc "$(ca_plan_text "${CA_MODEL[$i]}" "$dn")")" "${CA_EXP[$i]}" "$(badge "${CA_SEV[$i]}")"
+        printf '| `%s` | %s | %s |\n' \
+          "$(md_esc "${CA_LABEL[$i]}")" "${CA_EXP[$i]}" "$(badge "${CA_SEV[$i]}")"
       done
       printf '\n'
     fi
 
     if [[ $N_LEAF -gt 0 ]]; then
       printf '## Leaf certificates (1-phase)\n\n'
+      _leafapply="$([[ "${leaf_absorbed:-0}" -eq 1 ]] && echo 'folded into shared apply #2' || echo '1× (leaf campaign)')"
       printf '| Deployment | Leaf certs | Apply |\n|---|---:|---|\n'
       for dep in "${!LEAF_BY_DEP[@]}"; do
-        printf '| `%s` | %d | 1× (with the leaf campaign) |\n' "$(md_esc "$dep")" "${LEAF_BY_DEP[$dep]}"
+        printf '| `%s` | %d | %s |\n' "$(md_esc "$dep")" "${LEAF_BY_DEP[$dep]}" "$_leafapply"
       done
       printf '\n'
     fi
 
     printf '## Estimate breakdown\n\n'
     printf '| Campaign | Applies | Time (low – high) |\n|---|---|---|\n'
-    [[ $N_LEAF -gt 0 ]] && printf '| Leaf certs | %d× over %d deployment(s) | %s – %s |\n' \
-      "$LEAF_APPLY_COUNT" "${#LEAF_BY_DEP[@]}" "$(fmt_min "$leaf_lo")" "$(fmt_min "$leaf_hi")"
-    if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
-      if [[ "$CA_BATCH" == "1" ]]; then
-        printf '| CA certs (batched) | %d× foundation-wide + per-deployment leaf-regen | %s – %s |\n' \
-          "$max_fnd_phases" "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")"
+    if [[ $N_LEAF -gt 0 ]]; then
+      if [[ "${leaf_absorbed:-0}" -eq 1 ]]; then
+        printf '| Leaf certs | folded into the shared apply #2 | included |\n'
       else
-        printf '| CA certs (un-batched) | each CA costed separately | %s – %s |\n' "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")"
+        printf '| Leaf certs | %d× over %d deployment(s) | %s – %s |\n' \
+          "$LEAF_APPLY_COUNT" "${#LEAF_BY_DEP[@]}" "$(fmt_min "$leaf_lo")" "$(fmt_min "$leaf_hi")"
       fi
+    fi
+    if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
+      case "$CA_BATCH" in
+        0) printf '| CA certs (un-batched) | each CA costed separately | %s – %s |\n' "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")";;
+        2) if [[ "${leaf_absorbed:-0}" -eq 1 ]]; then
+             printf '| CA certs (full batch) | %d× foundation-wide on all tiles — all CAs + leaves | %s – %s |\n' \
+               "$max_fnd_phases" "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")"
+           else
+             printf '| CA certs (batched) | %d× foundation-wide + per-deployment | %s – %s |\n' \
+               "$max_fnd_phases" "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")"
+           fi;;
+        *) printf '| CA certs (batched) | %d× foundation-wide + per-deployment leaf-regen | %s – %s |\n' \
+             "$max_fnd_phases" "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")";;
+      esac
     fi
     printf '| **Total** | | **%s – %s** |\n\n' "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")"
 

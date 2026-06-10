@@ -188,9 +188,8 @@ table { page-break-inside: avoid; }
 Rotation Estimate</h1>
 <ul>
 <li><strong>Director:</strong> <code>192.168.2.2</code></li>
-<li><strong>Generated:</strong> 2026-06-10 10:13:00 UTC</li>
-<li><strong>Horizon:</strong> certificates expiring within
-<code>5y</code></li>
+<li><strong>Generated:</strong> 2026-06-10 10:42:40 UTC</li>
+<li><strong>Horizon:</strong> all certificates (no expiry limit)</li>
 <li><strong>Topology source:</strong> <code>maestro tp</code></li>
 <li><strong>Update rules:</strong> <code>bosh manifest</code> (per-IG
 max_in_flight/canaries)</li>
@@ -205,7 +204,7 @@ max_in_flight/canaries)</li>
 </thead>
 <tbody>
 <tr>
-<td>Expiring certs (≤ 5y)</td>
+<td>Expiring certs (all (no limit))</td>
 <td>112 (❌ 0 · ⚠️ 0)</td>
 </tr>
 <tr>
@@ -222,7 +221,7 @@ max_in_flight/canaries)</li>
 </tr>
 <tr>
 <td><strong>Estimated rotation time</strong></td>
-<td><strong>11h 00m – 20h 10m</strong></td>
+<td><strong>3h 00m – 5h 30m</strong></td>
 </tr>
 </tbody>
 </table>
@@ -253,17 +252,13 @@ estimate.</p>
 <h2 id="ca-rotations-3-phase">CA rotations (3-phase)</h2>
 <table>
 <colgroup>
-<col style="width: 20%" />
-<col style="width: 20%" />
-<col style="width: 20%" />
-<col style="width: 20%" />
-<col style="width: 20%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
 </colgroup>
 <thead>
 <tr>
-<th>CA</th>
-<th>Scope model</th>
-<th>Apply plan</th>
+<th>Certificate</th>
 <th>Expires</th>
 <th>Severity</th>
 </tr>
@@ -271,51 +266,36 @@ estimate.</p>
 <tbody>
 <tr>
 <td><code>.properties.nats_client_ca.3506e33356bef86af963</code></td>
-<td>FOUNDATION</td>
-<td>3x foundation-wide</td>
 <td>2030-05-29T03:06:57Z</td>
 <td>ℹ️ info</td>
 </tr>
 <tr>
 <td><code>.properties.root_ca.3506e33356bef86af963</code></td>
-<td>FOUNDATION</td>
-<td>3x foundation-wide</td>
 <td>2030-05-29T03:06:57Z</td>
 <td>ℹ️ info</td>
 </tr>
 <tr>
 <td><code>/p-bosh/cf-dbe1a7580979a87638e7/diego-instance-identity-intermediate-ca-2-7</code></td>
-<td>DEPLOYMENT</td>
-<td>3x cf-dbe1a7580979a87638e7</td>
 <td>2028-06-09T04:19:47Z</td>
 <td>ℹ️ info</td>
 </tr>
 <tr>
 <td><code>/opsmgr/bosh_dns/tls_ca</code></td>
-<td>FOUNDATION</td>
-<td>3x foundation-wide</td>
 <td>2030-05-29T16:32:50Z</td>
 <td>ℹ️ info</td>
 </tr>
 <tr>
 <td><code>/cf/diego-instance-identity-root-ca-2-6</code></td>
-<td>DEPLOYMENT</td>
-<td>3x cf-dbe1a7580979a87638e7</td>
 <td>2029-05-29T16:32:45Z</td>
 <td>ℹ️ info</td>
 </tr>
 <tr>
 <td><code>/services/tls_ca</code></td>
-<td>TRUSTED</td>
-<td>2x foundation-wide (BOSH trusted-certs add+remove) + 1x
-cf-dbe1a7580979a87638e7</td>
 <td>2031-05-29T03:24:34Z</td>
 <td>ℹ️ info</td>
 </tr>
 <tr>
 <td><code>opsman-root-ca:3506e333</code></td>
-<td>FOUNDATION</td>
-<td>3x foundation-wide</td>
 <td>2030-05-29T03:06:57Z</td>
 <td>ℹ️ info</td>
 </tr>
@@ -334,12 +314,12 @@ cf-dbe1a7580979a87638e7</td>
 <tr>
 <td><code>p-bosh (not VM-counted)</code></td>
 <td style="text-align: right;">11</td>
-<td>1× (with the leaf campaign)</td>
+<td>folded into shared apply #2</td>
 </tr>
 <tr>
 <td><code>cf-dbe1a7580979a87638e7</code></td>
 <td style="text-align: right;">94</td>
-<td>1× (with the leaf campaign)</td>
+<td>folded into shared apply #2</td>
 </tr>
 </tbody>
 </table>
@@ -360,18 +340,18 @@ cf-dbe1a7580979a87638e7</td>
 <tbody>
 <tr>
 <td>Leaf certs</td>
-<td>1× over 2 deployment(s)</td>
-<td>1h 00m – 1h 50m</td>
+<td>folded into the shared apply #2</td>
+<td>included</td>
 </tr>
 <tr>
-<td>CA certs (batched)</td>
-<td>3× foundation-wide + per-deployment leaf-regen</td>
-<td>10h 00m – 18h 20m</td>
+<td>CA certs (full batch)</td>
+<td>3× foundation-wide on all tiles — all CAs + leaves</td>
+<td>3h 00m – 5h 30m</td>
 </tr>
 <tr>
 <td><strong>Total</strong></td>
 <td></td>
-<td><strong>11h 00m – 20h 10m</strong></td>
+<td><strong>3h 00m – 5h 30m</strong></td>
 </tr>
 </tbody>
 </table>
