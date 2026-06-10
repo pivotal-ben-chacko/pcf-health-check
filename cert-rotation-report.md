@@ -1,7 +1,7 @@
 # PCF lab Certificate Rotation Estimate
 
 - **Director:** `192.168.2.2`
-- **Generated:** 2026-06-10 11:20:56 UTC
+- **Generated:** 2026-06-10 12:04:48 UTC
 - **Horizon:** all certificates (no expiry limit)
 - **Topology source:** `maestro tp`
 - **Update rules:** `bosh manifest` (per-IG max_in_flight/canaries)
@@ -12,6 +12,7 @@
 |---|---|
 | Expiring certs (all (no limit)) | 112 (❌ 0 · ⚠️ 0) |
 | — leaf / CA | 105 / 7 |
+| — require Digicert (operator-supplied) | 3 |
 | Live VMs (DB nodes) | 7 (2) |
 | One foundation-wide Apply | 1h 00m – 1h 50m |
 | **Estimated rotation time** | **3h 00m – 5h 30m** |
@@ -46,6 +47,20 @@
 |---|---:|
 | `p-bosh (not VM-counted)` | 11 |
 | `cf-dbe1a7580979a87638e7` | 94 |
+
+## Operator-supplied certificates — require Digicert
+
+> Not auto-generated. A new certificate must be obtained from Digicert before rotation (out-of-band; not included in the Apply Changes time above).
+
+<table>
+<colgroup><col style="width:82%"><col style="width:18%"></colgroup>
+<thead><tr><th>Certificate</th><th>Expires</th></tr></thead>
+<tbody>
+<tr><td><code>.properties.root_ca.3506e33356bef86af963</code></td><td style="white-space:nowrap">2030-05-29T03:06:57Z</td></tr>
+<tr><td><code>.properties.networking_poe_ssl_certs[0].certificate</code></td><td style="white-space:nowrap">2028-06-09T04:14:31Z</td></tr>
+<tr><td><code>.uaa.service_provider_key_credentials</code></td><td style="white-space:nowrap">2028-06-09T04:15:13Z</td></tr>
+</tbody>
+</table>
 
 ## Estimate breakdown
 

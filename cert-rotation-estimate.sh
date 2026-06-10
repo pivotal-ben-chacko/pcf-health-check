@@ -398,7 +398,8 @@ CERT_QUERY="/api/v0/deployed/certificates"
 certs_tsv="$(om curl -s -p "$CERT_QUERY" 2>/dev/null \
   | jq -r "${JQ_DEFS} .certificates[]? | [
         gid, (.is_ca // false | tostring), lbl,
-        (.location|c), (.valid_until // \"\"), (.rotation_procedure_name // \"\")
+        (.location|c), (.valid_until // \"\"), (.rotation_procedure_name // \"\"),
+        (.configurable // false | tostring)
       ] | join(\"\")" 2>/dev/null)"
 
 # Accumulators for the estimate.
@@ -407,6 +408,9 @@ declare -A LEAF_DEPS         # deployment -> 1, deployments touched by leaf rota
 declare -A LEAF_BY_DEP       # deployment -> leaf-cert count (for the markdown report)
 # Parallel CA record arrays, one entry per CA rotation (consumed by §3 / report).
 CA_MODEL=(); CA_DEP=(); CA_LABEL=(); CA_SEV=(); CA_EXP=()
+# Operator-supplied (configurable) certs — these are NOT auto-generated; a new
+# cert must be obtained from the external CA (Digicert) before rotation.
+CFG_LABEL=(); CFG_EXP=()
 
 emit_sev(){ # level message  -> calls the right logger and bumps counters
   case "$1" in CRIT) crit "$2"; N_CRIT=$((N_CRIT+1));;
@@ -436,7 +440,7 @@ ca_plan_text(){ # model dep
 if [[ -z "$certs_tsv" ]]; then
   ok "No deployed certificates expire within ${ROTATE_WINDOW}."
 else
-  while IFS="$SEP" read -r pguid is_ca pref loc vuntil proc; do
+  while IFS="$SEP" read -r pguid is_ca pref loc vuntil proc cfg; do
     [[ -z "$pref" || "$pref" == "-" ]] && continue
     key="${pguid}|${pref}"
     sev="INFO"
@@ -445,6 +449,11 @@ else
     ptxt="${proc:+ {${proc}}}"
     # Friendly product label; empty-guid certs are foundation-global credhub CAs.
     prod="${PROD_TYPE[$pguid]:-$pguid}"; [[ "$pguid" == "-" ]] && prod="credhub-global"
+    # Operator-supplied (configurable) cert — must be obtained from Digicert.
+    digitag=""
+    if [[ "$cfg" == "true" ]]; then
+      CFG_LABEL+=("$pref"); CFG_EXP+=("${vuntil:-—}"); digitag=" [requires Digicert]"
+    fi
 
     # CA rotation (3 Apply Changes) or leaf (1)? The API's rotation_procedure_name
     # is authoritative; fall back to is_ca / the label regex if it's absent.
@@ -465,7 +474,7 @@ else
       fi
       CA_MODEL+=("$model"); CA_DEP+=("$dep"); CA_LABEL+=("$pref"); CA_SEV+=("$sev"); CA_EXP+=("${vuntil:-—}")
       depname="$dep"; [[ "$dep" == "__FND__" ]] && depname="foundation"; depname="${depname// /, }"
-      emit_sev "$sev" "CA   ${pref} [${prod}] — ${model}: $(ca_plan_text "$model" "$depname") Apply Changes${vuntil:+, expires ${vuntil}}${ptxt}${depnote}"
+      emit_sev "$sev" "CA   ${pref} [${prod}] — ${model}: $(ca_plan_text "$model" "$depname") Apply Changes${vuntil:+, expires ${vuntil}}${ptxt}${depnote}${digitag}"
     else
       N_LEAF=$((N_LEAF+1))
       dep="$pguid"
@@ -477,7 +486,7 @@ else
         LEAF_BY_DEP["${prod} (not VM-counted)"]=$(( ${LEAF_BY_DEP["${prod} (not VM-counted)"]:-0} + 1 ))
       fi
       vmc="${VM_BY_DEP[$dep]:-?}"
-      emit_sev "$sev" "leaf ${pref} [${prod}] — ${dep} (${vmc} VMs, ${LEAF_APPLY_COUNT}x Apply Changes)${vuntil:+, expires ${vuntil}}${ptxt}"
+      emit_sev "$sev" "leaf ${pref} [${prod}] — ${dep} (${vmc} VMs, ${LEAF_APPLY_COUNT}x Apply Changes)${vuntil:+, expires ${vuntil}}${ptxt}${digitag}"
     fi
   done <<<"$certs_tsv"
 fi
@@ -602,6 +611,8 @@ TOTAL_HI="$(awk -v a="$leaf_total_hi" -v b="$ca_hi" 'BEGIN{printf "%.1f", a+b}')
 section "Summary"
 printf '  %sExpiring certs in horizon%s : %d (CRIT %d · WARN %d) — %d leaf, %d CA\n' \
   "$BOLD" "$RST" "$((N_LEAF+N_CA))" "$N_CRIT" "$N_WARN" "$N_LEAF" "$N_CA"
+[[ ${#CFG_LABEL[@]} -gt 0 ]] && printf '  %sRequires Digicert%s         : %d operator-supplied cert(s) — obtain a new cert before rotating\n' \
+  "$BOLD" "$RST" "${#CFG_LABEL[@]}"
 if [[ $((N_LEAF+N_CA)) -eq 0 ]]; then
   ok "Nothing to rotate within ${ROTATE_WINDOW}."
 else
@@ -643,13 +654,14 @@ if [[ $JSON_MODE -eq 1 ]]; then
     --argjson imm_fnd "${imm_fnd:-0}" \
     --argjson defer_lo "${defer_lo:-0}" --argjson defer_hi "${defer_hi:-0}" \
     --arg defer "$DEFER_CA_REMOVAL" \
+    --argjson digicert "${#CFG_LABEL[@]}" \
     '{
        window: $window, topology_source: $topo,
        update_policy_source: $upol, serial_false_instance_groups: $parallel_igs,
        total_vms: $total_vms, db_vms: $db_vms,
        ca_batch_mode: ($batch|tonumber), leaf_folded_into_ca: ($leaf_absorbed==1),
        defer_old_ca_removal: ($defer=="1"), immediate_foundation_applies: $imm_fnd,
-       expiring: { leaf: $leaf, ca: $ca, crit: $crit, warn: $warn },
+       expiring: { leaf: $leaf, ca: $ca, crit: $crit, warn: $warn, requires_digicert: $digicert },
        ca_models: { foundation: $nf, services_trusted_certs: $nt, deployment: $nd },
        shared_foundation_applies: $fnd_phases,
        leaf_scope_vms: $leaf_vms,
@@ -679,6 +691,7 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf '| Metric | Value |\n|---|---|\n'
     printf '| Expiring certs (%s) | %d (❌ %d · ⚠️ %d) |\n' "$HORIZON_TEXT" "$((N_LEAF+N_CA))" "$N_CRIT" "$N_WARN"
     printf '| — leaf / CA | %d / %d |\n' "$N_LEAF" "$N_CA"
+    [[ ${#CFG_LABEL[@]} -gt 0 ]] && printf '| — require Digicert (operator-supplied) | %d |\n' "${#CFG_LABEL[@]}"
     printf '| Live VMs (DB nodes) | %d (%d) |\n' "$TOTAL_VMS" "$TOTAL_DB_VMS"
     printf '| One foundation-wide Apply | %s – %s |\n' "$(fmt_min "$FND_LO")" "$(fmt_min "$FND_HI")"
     printf '| **Estimated rotation time** | **%s – %s** |\n' "$(fmt_min "$TOTAL_LO")" "$(fmt_min "$TOTAL_HI")"
@@ -723,6 +736,17 @@ if [[ $MD_MODE -eq 1 ]]; then
         printf '| `%s` | %d |\n' "$(md_esc "$dep")" "${LEAF_BY_DEP[$dep]}"
       done
       printf '\n'
+    fi
+
+    if [[ ${#CFG_LABEL[@]} -gt 0 ]]; then
+      printf '## Operator-supplied certificates — require Digicert\n\n'
+      printf '> Not auto-generated. A new certificate must be obtained from Digicert before rotation (out-of-band; not included in the Apply Changes time above).\n\n'
+      printf '<table>\n<colgroup><col style="width:82%%"><col style="width:18%%"></colgroup>\n'
+      printf '<thead><tr><th>Certificate</th><th>Expires</th></tr></thead>\n<tbody>\n'
+      for i in "${!CFG_LABEL[@]}"; do
+        printf '<tr><td><code>%s</code></td><td style="white-space:nowrap">%s</td></tr>\n' "${CFG_LABEL[$i]}" "${CFG_EXP[$i]}"
+      done
+      printf '</tbody>\n</table>\n\n'
     fi
 
     printf '## Estimate breakdown\n\n'

@@ -188,7 +188,7 @@ table { page-break-inside: avoid; }
 Rotation Estimate</h1>
 <ul>
 <li><strong>Director:</strong> <code>192.168.2.2</code></li>
-<li><strong>Generated:</strong> 2026-06-10 11:20:56 UTC</li>
+<li><strong>Generated:</strong> 2026-06-10 12:04:48 UTC</li>
 <li><strong>Horizon:</strong> all certificates (no expiry limit)</li>
 <li><strong>Topology source:</strong> <code>maestro tp</code></li>
 <li><strong>Update rules:</strong> <code>bosh manifest</code> (per-IG
@@ -210,6 +210,10 @@ max_in_flight/canaries)</li>
 <tr>
 <td>— leaf / CA</td>
 <td>105 / 7</td>
+</tr>
+<tr>
+<td>— require Digicert (operator-supplied)</td>
+<td>3</td>
 </tr>
 <tr>
 <td>Live VMs (DB nodes)</td>
@@ -340,6 +344,55 @@ Expires
 <tr>
 <td><code>cf-dbe1a7580979a87638e7</code></td>
 <td style="text-align: right;">94</td>
+</tr>
+</tbody>
+</table>
+<h2 id="operator-supplied-certificates-require-digicert">Operator-supplied
+certificates — require Digicert</h2>
+<blockquote>
+<p>Not auto-generated. A new certificate must be obtained from Digicert
+before rotation (out-of-band; not included in the Apply Changes time
+above).</p>
+</blockquote>
+<table>
+<colgroup>
+<col style="width:82%">
+<col style="width:18%">
+</colgroup>
+<thead>
+<tr>
+<th>
+Certificate
+</th>
+<th>
+Expires
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>.properties.root_ca.3506e33356bef86af963</code>
+</td>
+<td style="white-space:nowrap">
+2030-05-29T03:06:57Z
+</td>
+</tr>
+<tr>
+<td>
+<code>.properties.networking_poe_ssl_certs[0].certificate</code>
+</td>
+<td style="white-space:nowrap">
+2028-06-09T04:14:31Z
+</td>
+</tr>
+<tr>
+<td>
+<code>.uaa.service_provider_key_credentials</code>
+</td>
+<td style="white-space:nowrap">
+2028-06-09T04:15:13Z
+</td>
 </tr>
 </tbody>
 </table>
