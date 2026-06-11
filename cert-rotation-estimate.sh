@@ -482,6 +482,9 @@ declare -A LEAF_PAIR         # "dep<SEP>ig" -> 1, IG(s) a leaf rotation recreate
 declare -A LEAF_DEP_ALL      # deployment -> 1, has an unmapped leaf -> cost whole-dep
 # Parallel CA record arrays, one entry per CA rotation (consumed by §3 / report).
 CA_MODEL=(); CA_DEP=(); CA_LABEL=(); CA_SEV=(); CA_EXP=()
+# Every expiring cert (leaf and CA) for the consolidated "Expiring certificates"
+# report table: "<expiry>\t<kind>\t<label>" so a plain sort orders by date.
+EXP_CERTS=()
 # Operator-supplied (configurable) certs — these are NOT auto-generated; a new
 # cert must be obtained from the external CA (Digicert) before rotation.
 CFG_LABEL=(); CFG_EXP=()
@@ -556,10 +559,12 @@ else
         else depnote=" (owning deployment unknown — leaf-regen costed foundation-wide)"; fi
       fi
       CA_MODEL+=("$model"); CA_DEP+=("$dep"); CA_LABEL+=("$pref"); CA_SEV+=("$sev"); CA_EXP+=("${vuntil:-—}")
+      EXP_CERTS+=("${vuntil:-~}"$'\t'"CA"$'\t'"${pref}")
       depname="$dep"; [[ "$dep" == "__FND__" ]] && depname="foundation"; depname="${depname// /, }"
       emit_sev "$sev" "CA   ${pref} [${prod}] — ${model}: $(ca_plan_text "$model" "$depname") Apply Changes${vuntil:+, expires ${vuntil}}${ptxt}${depnote}${digitag}"
     else
       N_LEAF=$((N_LEAF+1))
+      EXP_CERTS+=("${vuntil:-~}"$'\t'"Leaf"$'\t'"${pref}")
       # Operator-supplied (configurable) LEAF cert — not auto-generated; a new cert
       # must be obtained from Digicert. CAs are excluded (e.g. the opsman root CA).
       if [[ "$cfg" == "true" ]]; then
@@ -599,6 +604,7 @@ while IFS=$'\t' read -r guid active expires; do
   if   [[ $days -le $(window_days "$CERT_CRIT_WINDOW") ]]; then rsev="CRIT"
   elif [[ $days -le $(window_days "$CERT_WARN_WINDOW") ]]; then rsev="WARN"; fi
   CA_MODEL+=("FOUNDATION"); CA_DEP+=("__FND__"); CA_LABEL+=("opsman-root-ca:${guid:0:8}"); CA_SEV+=("$rsev"); CA_EXP+=("$expires")
+  EXP_CERTS+=("${expires}"$'\t'"CA"$'\t'"opsman-root-ca:${guid:0:8}")
   msg="Ops Manager ROOT CA ${guid:0:8}… expires in ${days}d (${expires}) — FOUNDATION: ${CA_APPLY_COUNT}x foundation-wide Apply Changes over ${TOTAL_VMS} VMs"
   case "$rsev" in CRIT) crit "$msg"; N_CRIT=$((N_CRIT+1));; WARN) warn "$msg"; N_WARN=$((N_WARN+1));; *) info "$msg";; esac
 done < <(om curl -s -p /api/v0/certificate_authorities 2>/dev/null \
@@ -799,6 +805,20 @@ if [[ $MD_MODE -eq 1 ]]; then
     [[ "$DEFER_CA_REMOVAL" == "1" && $(awk -v x="${defer_hi:-0}" 'BEGIN{print (x>0)}') -eq 1 ]] && \
       printf '| Deferred old-CA removal (later) | %s – %s |\n' "$(fmt_min "$defer_lo")" "$(fmt_min "$defer_hi")"
     printf '\n'
+
+    # Consolidated list of every expiring cert (leaf + CA), sorted soonest-first.
+    if [[ ${#EXP_CERTS[@]} -gt 0 ]]; then
+      printf '## Expiring certificates (within %s)\n\n' "$HORIZON_TEXT"
+      printf '<table>\n<colgroup><col style="width:60%%"><col style="width:15%%"><col style="width:25%%"></colgroup>\n'
+      printf '<thead><tr><th>Certificate</th><th>Type</th><th>Expires</th></tr></thead>\n<tbody>\n'
+      while IFS=$'\t' read -r xdate xkind xlabel; do
+        [[ -z "$xlabel" ]] && continue
+        [[ "$xdate" == "~" ]] && xdate="—"
+        printf '<tr><td><code>%s</code></td><td>%s</td><td style="white-space:nowrap">%s</td></tr>\n' \
+          "$xlabel" "$xkind" "$xdate"
+      done < <(printf '%s\n' "${EXP_CERTS[@]}" | sort)
+      printf '</tbody>\n</table>\n\n'
+    fi
 
     printf '## Foundation inventory\n\n'
     # Per-deployment rotation time:
