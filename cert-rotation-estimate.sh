@@ -517,6 +517,16 @@ ca_plan_text(){ # model dep
     DEPLOYMENT) echo "${DEP_CA_APPLIES}x ${2}";;
   esac
 }
+# Concise apply count per CA, for the report's CA-rotations table (not all CAs are
+# 3-phase: a trusted-store CA is a single swap apply).
+ca_plan_short(){ # model
+  case "$1" in
+    FOUNDATION) echo "${CA_APPLY_COUNT}× foundation-wide";;
+    TRUSTED)    echo "${SERVICES_CA_FND_APPLIES}× foundation + ${SERVICES_CA_DEP_APPLIES}× deployment";;
+    TRUST)      echo "${TRUST_CA_FND_APPLIES}× foundation-wide";;
+    DEPLOYMENT) echo "${DEP_CA_APPLIES}× on deployment";;
+  esac
+}
 
 if [[ -z "$certs_tsv" ]]; then
   ok "No deployed certificates expire within ${ROTATE_WINDOW}."
@@ -854,12 +864,14 @@ if [[ $MD_MODE -eq 1 ]]; then
     if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
       # Raw HTML table with a colgroup so the certificate name gets most of the
       # width and the fixed-width expiry stays on one line (styled by the shared CSS).
-      printf '## CA rotations (3-phase)\n\n'
-      printf '<table>\n<colgroup><col style="width:82%%"><col style="width:18%%"></colgroup>\n'
-      printf '<thead><tr><th>Certificate</th><th>Expires</th></tr></thead>\n<tbody>\n'
+      # The Rotation column shows each CA's apply count — they are NOT all 3-phase
+      # (a BOSH trusted-store CA is a single foundation-wide swap apply).
+      printf '## CA rotations\n\n'
+      printf '<table>\n<colgroup><col style="width:54%%"><col style="width:28%%"><col style="width:18%%"></colgroup>\n'
+      printf '<thead><tr><th>Certificate</th><th>Rotation</th><th>Expires</th></tr></thead>\n<tbody>\n'
       for i in "${!CA_MODEL[@]}"; do
-        printf '<tr><td><code>%s</code></td><td style="white-space:nowrap">%s</td></tr>\n' \
-          "${CA_LABEL[$i]}" "${CA_EXP[$i]}"
+        printf '<tr><td><code>%s</code></td><td>%s</td><td style="white-space:nowrap">%s</td></tr>\n' \
+          "${CA_LABEL[$i]}" "$(ca_plan_short "${CA_MODEL[$i]}")" "${CA_EXP[$i]}"
       done
       printf '</tbody>\n</table>\n\n'
     fi

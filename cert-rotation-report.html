@@ -193,7 +193,7 @@ table { page-break-inside: avoid; }
 Estimate</h1>
 <ul>
 <li><strong>Director:</strong> <code>192.168.2.2</code></li>
-<li><strong>Generated:</strong> 2026-06-11 03:28:21 UTC</li>
+<li><strong>Generated:</strong> 2026-06-11 03:51:35 UTC</li>
 <li><strong>Horizon:</strong> all certificates (no expiry limit)</li>
 <li><strong>Topology source:</strong> <code>maestro tp</code></li>
 <li><strong>Update rules:</strong> <code>bosh manifest</code> (per-IG
@@ -1528,16 +1528,20 @@ Est. cert-rotation time
 in parallel, so real time can come in under the (conservative serial)
 estimate.</p>
 </blockquote>
-<h2 id="ca-rotations-3-phase">CA rotations (3-phase)</h2>
+<h2 id="ca-rotations">CA rotations</h2>
 <table>
 <colgroup>
-<col style="width:82%">
+<col style="width:54%">
+<col style="width:28%">
 <col style="width:18%">
 </colgroup>
 <thead>
 <tr>
 <th>
 Certificate
+</th>
+<th>
+Rotation
 </th>
 <th>
 Expires
@@ -1549,6 +1553,9 @@ Expires
 <td>
 <code>.properties.nats_client_ca.3506e33356bef86af963</code>
 </td>
+<td>
+3× foundation-wide
+</td>
 <td style="white-space:nowrap">
 2030-05-29T03:06:57Z
 </td>
@@ -1556,6 +1563,9 @@ Expires
 <tr>
 <td>
 <code>.properties.root_ca.3506e33356bef86af963</code>
+</td>
+<td>
+3× foundation-wide
 </td>
 <td style="white-space:nowrap">
 2030-05-29T03:06:57Z
@@ -1565,6 +1575,9 @@ Expires
 <td>
 <code>/p-bosh/cf-dbe1a7580979a87638e7/diego-instance-identity-intermediate-ca-2-7</code>
 </td>
+<td>
+3× on deployment
+</td>
 <td style="white-space:nowrap">
 2028-06-09T04:19:47Z
 </td>
@@ -1572,6 +1585,9 @@ Expires
 <tr>
 <td>
 <code>/opsmgr/bosh_dns/tls_ca</code>
+</td>
+<td>
+3× foundation-wide
 </td>
 <td style="white-space:nowrap">
 2030-05-29T16:32:50Z
@@ -1581,6 +1597,9 @@ Expires
 <td>
 <code>/cf/diego-instance-identity-root-ca-2-6</code>
 </td>
+<td>
+3× on deployment
+</td>
 <td style="white-space:nowrap">
 2029-05-29T16:32:45Z
 </td>
@@ -1589,6 +1608,9 @@ Expires
 <td>
 <code>/services/tls_ca</code>
 </td>
+<td>
+2× foundation + 1× deployment
+</td>
 <td style="white-space:nowrap">
 2031-05-29T03:24:34Z
 </td>
@@ -1596,6 +1618,9 @@ Expires
 <tr>
 <td>
 <code>opsman-root-ca:3506e333</code>
+</td>
+<td>
+3× foundation-wide
 </td>
 <td style="white-space:nowrap">
 2030-05-29T03:06:57Z

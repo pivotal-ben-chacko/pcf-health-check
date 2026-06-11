@@ -1,7 +1,7 @@
 # PCF Certificate Rotation Estimate
 
 - **Director:** `192.168.2.2`
-- **Generated:** 2026-06-11 03:28:21 UTC
+- **Generated:** 2026-06-11 03:51:35 UTC
 - **Horizon:** all certificates (no expiry limit)
 - **Topology source:** `maestro tp`
 - **Update rules:** `bosh manifest` (per-IG max_in_flight/canaries)
@@ -150,19 +150,19 @@
 
 > 2 instance group(s) have `serial:false` — they may update in parallel, so real time can come in under the (conservative serial) estimate.
 
-## CA rotations (3-phase)
+## CA rotations
 
 <table>
-<colgroup><col style="width:82%"><col style="width:18%"></colgroup>
-<thead><tr><th>Certificate</th><th>Expires</th></tr></thead>
+<colgroup><col style="width:54%"><col style="width:28%"><col style="width:18%"></colgroup>
+<thead><tr><th>Certificate</th><th>Rotation</th><th>Expires</th></tr></thead>
 <tbody>
-<tr><td><code>.properties.nats_client_ca.3506e33356bef86af963</code></td><td style="white-space:nowrap">2030-05-29T03:06:57Z</td></tr>
-<tr><td><code>.properties.root_ca.3506e33356bef86af963</code></td><td style="white-space:nowrap">2030-05-29T03:06:57Z</td></tr>
-<tr><td><code>/p-bosh/cf-dbe1a7580979a87638e7/diego-instance-identity-intermediate-ca-2-7</code></td><td style="white-space:nowrap">2028-06-09T04:19:47Z</td></tr>
-<tr><td><code>/opsmgr/bosh_dns/tls_ca</code></td><td style="white-space:nowrap">2030-05-29T16:32:50Z</td></tr>
-<tr><td><code>/cf/diego-instance-identity-root-ca-2-6</code></td><td style="white-space:nowrap">2029-05-29T16:32:45Z</td></tr>
-<tr><td><code>/services/tls_ca</code></td><td style="white-space:nowrap">2031-05-29T03:24:34Z</td></tr>
-<tr><td><code>opsman-root-ca:3506e333</code></td><td style="white-space:nowrap">2030-05-29T03:06:57Z</td></tr>
+<tr><td><code>.properties.nats_client_ca.3506e33356bef86af963</code></td><td>3× foundation-wide</td><td style="white-space:nowrap">2030-05-29T03:06:57Z</td></tr>
+<tr><td><code>.properties.root_ca.3506e33356bef86af963</code></td><td>3× foundation-wide</td><td style="white-space:nowrap">2030-05-29T03:06:57Z</td></tr>
+<tr><td><code>/p-bosh/cf-dbe1a7580979a87638e7/diego-instance-identity-intermediate-ca-2-7</code></td><td>3× on deployment</td><td style="white-space:nowrap">2028-06-09T04:19:47Z</td></tr>
+<tr><td><code>/opsmgr/bosh_dns/tls_ca</code></td><td>3× foundation-wide</td><td style="white-space:nowrap">2030-05-29T16:32:50Z</td></tr>
+<tr><td><code>/cf/diego-instance-identity-root-ca-2-6</code></td><td>3× on deployment</td><td style="white-space:nowrap">2029-05-29T16:32:45Z</td></tr>
+<tr><td><code>/services/tls_ca</code></td><td>2× foundation + 1× deployment</td><td style="white-space:nowrap">2031-05-29T03:24:34Z</td></tr>
+<tr><td><code>opsman-root-ca:3506e333</code></td><td>3× foundation-wide</td><td style="white-space:nowrap">2030-05-29T03:06:57Z</td></tr>
 </tbody>
 </table>
 

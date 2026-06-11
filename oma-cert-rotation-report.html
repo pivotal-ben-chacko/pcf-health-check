@@ -194,7 +194,7 @@ Rotation Estimate</h1>
 <ul>
 <li><strong>Director:</strong>
 <code>director.system.us-oma1-ip01.1dc.com</code></li>
-<li><strong>Generated:</strong> 2026-06-10 18:11:21 UTC</li>
+<li><strong>Generated:</strong> 2026-06-11 03:36:04 UTC</li>
 <li><strong>Horizon:</strong> certificates expiring within
 <code>45d</code></li>
 <li><strong>Topology source:</strong> <code>maestro tp</code></li>
@@ -216,7 +216,7 @@ max_in_flight/canaries)</li>
 </tr>
 <tr>
 <td>— leaf / CA</td>
-<td>5 / 1</td>
+<td>4 / 2</td>
 </tr>
 <tr>
 <td>— require Digicert (operator-supplied)</td>
@@ -224,15 +224,15 @@ max_in_flight/canaries)</li>
 </tr>
 <tr>
 <td>Live VMs</td>
-<td>559</td>
+<td>558</td>
 </tr>
 <tr>
 <td>One foundation-wide Apply</td>
-<td>24h 08m – 59h 50m</td>
+<td>24h 04m – 59h 40m</td>
 </tr>
 <tr>
 <td><strong>Estimated rotation time</strong></td>
-<td><strong>48h 16m – 119h 40m</strong></td>
+<td><strong>48h 08m – 119h 20m</strong></td>
 </tr>
 </tbody>
 </table>
@@ -260,7 +260,7 @@ Expires
 <tbody>
 <tr>
 <td>
-<code>/services/tls_ca</code>
+<code>.security_configuration.trusted_certificates[1]</code>
 </td>
 <td>
 CA
@@ -271,10 +271,10 @@ CA
 </tr>
 <tr>
 <td>
-<code>.security_configuration.trusted_certificates[1]</code>
+<code>/services/tls_ca</code>
 </td>
 <td>
-Leaf
+CA
 </td>
 <td style="white-space:nowrap">
 2026-07-11T06:24:57Z
@@ -347,17 +347,6 @@ Est. cert-rotation time
 </tr>
 </thead>
 <tbody>
-<tr>
-<td>
-<code>bosh-health</code>
-</td>
-<td style="text-align:right">
-1
-</td>
-<td style="white-space:nowrap">
-48m – 1h 00m
-</td>
-</tr>
 <tr>
 <td>
 <code>cf-faf3d38a0032988a4dc2</code>
@@ -1531,16 +1520,20 @@ Est. cert-rotation time
 in parallel, so real time can come in under the (conservative serial)
 estimate.</p>
 </blockquote>
-<h2 id="ca-rotations-3-phase">CA rotations (3-phase)</h2>
+<h2 id="ca-rotations">CA rotations</h2>
 <table>
 <colgroup>
-<col style="width:82%">
+<col style="width:54%">
+<col style="width:28%">
 <col style="width:18%">
 </colgroup>
 <thead>
 <tr>
 <th>
 Certificate
+</th>
+<th>
+Rotation
 </th>
 <th>
 Expires
@@ -1550,7 +1543,21 @@ Expires
 <tbody>
 <tr>
 <td>
+<code>.security_configuration.trusted_certificates[1]</code>
+</td>
+<td>
+1× foundation-wide
+</td>
+<td style="white-space:nowrap">
+2026-07-11T06:24:57Z
+</td>
+</tr>
+<tr>
+<td>
 <code>/services/tls_ca</code>
+</td>
+<td>
+2× foundation + 1× deployment
 </td>
 <td style="white-space:nowrap">
 2026-07-11T06:24:57Z
@@ -1567,10 +1574,6 @@ Expires
 </tr>
 </thead>
 <tbody>
-<tr>
-<td><code>p-bosh (not VM-counted)</code></td>
-<td style="text-align: right;">1</td>
-</tr>
 <tr>
 <td><code>cf-faf3d38a0032988a4dc2</code></td>
 <td style="text-align: right;">3</td>
@@ -1669,12 +1672,12 @@ Expires
 <tr>
 <td>CA certs (full batch)</td>
 <td>2× foundation-wide on all tiles — all CAs + leaves</td>
-<td>48h 16m – 119h 40m</td>
+<td>48h 08m – 119h 20m</td>
 </tr>
 <tr>
 <td><strong>Total</strong></td>
 <td></td>
-<td><strong>48h 16m – 119h 40m</strong></td>
+<td><strong>48h 08m – 119h 20m</strong></td>
 </tr>
 </tbody>
 </table>
@@ -1682,7 +1685,8 @@ Expires
 <ul>
 <li>20m overhead per Apply Changes; 4–10m per VM.</li>
 <li>A FOUNDATION CA = 3 foundation-wide applies; a services TLS CA = 2
-foundation + 1 deployment applies; a deployment CA = 3 on its
+foundation + 1 deployment applies; a BOSH trusted-store CA = 1
+foundation-wide apply (swap in place); a deployment CA = 3 on its
 deployment.</li>
 <li>Estimate is <strong>Apply Changes compute time only</strong> — it
 excludes change-window / approval gaps between phases, which often

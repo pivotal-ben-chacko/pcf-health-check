@@ -1,35 +1,30 @@
 # PCF OMA Certificate Rotation Estimate
 
-
 - **Director:** `director.system.us-oma1-ip01.1dc.com`
-- **Generated:** 2026-06-10 18:11:21 UTC
+- **Generated:** 2026-06-11 03:36:04 UTC
 - **Horizon:** certificates expiring within `45d`
 - **Topology source:** `maestro tp`
 - **Update rules:** `bosh manifest` (per-IG max_in_flight/canaries)
 
-
 ## Summary
-
 
 | Metric | Value |
 |---|---|
 | Expiring certs (45d) | 6 |
-| — leaf / CA | 5 / 1 |
+| — leaf / CA | 4 / 2 |
 | — require Digicert (operator-supplied) | 5 |
-| Live VMs | 559 |
-| One foundation-wide Apply | 24h 08m – 59h 50m |
-| **Estimated rotation time** | **48h 16m – 119h 40m** |
-
+| Live VMs | 558 |
+| One foundation-wide Apply | 24h 04m – 59h 40m |
+| **Estimated rotation time** | **48h 08m – 119h 20m** |
 
 ## Expiring certificates (within 45d)
-
 
 <table>
 <colgroup><col style="width:60%"><col style="width:15%"><col style="width:25%"></colgroup>
 <thead><tr><th>Certificate</th><th>Type</th><th>Expires</th></tr></thead>
 <tbody>
+<tr><td><code>.security_configuration.trusted_certificates[1]</code></td><td>CA</td><td style="white-space:nowrap">2026-07-11T06:24:57Z</td></tr>
 <tr><td><code>/services/tls_ca</code></td><td>CA</td><td style="white-space:nowrap">2026-07-11T06:24:57Z</td></tr>
-<tr><td><code>.security_configuration.trusted_certificates[1]</code></td><td>Leaf</td><td style="white-space:nowrap">2026-07-11T06:24:57Z</td></tr>
 <tr><td><code>.properties.routing_custom_ca_certificates</code></td><td>Leaf</td><td style="white-space:nowrap">2026-07-11T06:24:57Z</td></tr>
 <tr><td><code>.properties.grafana_route.manual.ssl_certificates</code></td><td>Leaf</td><td style="white-space:nowrap">2026-07-14T04:01:24Z</td></tr>
 <tr><td><code>.properties.networking_poe_ssl_certs[0].certificate</code></td><td>Leaf</td><td style="white-space:nowrap">2026-07-14T04:01:24Z</td></tr>
@@ -37,15 +32,12 @@
 </tbody>
 </table>
 
-
 ## Foundation inventory
-
 
 <table>
 <colgroup><col style="width:72%"><col style="width:8%"><col style="width:20%"></colgroup>
 <thead><tr><th>Deployment</th><th style="text-align:right">VMs</th><th>Est. cert-rotation time</th></tr></thead>
 <tbody>
-<tr><td><code>bosh-health</code></td><td style="text-align:right">1</td><td style="white-space:nowrap">48m – 1h 00m</td></tr>
 <tr><td><code>cf-faf3d38a0032988a4dc2</code></td><td style="text-align:right">364</td><td style="white-space:nowrap">22h 40m – 55h 40m</td></tr>
 <tr><td><code>concourse</code></td><td style="text-align:right">8</td><td style="white-space:nowrap">1h 20m – 2h 20m</td></tr>
 <tr><td><code>credhub-service-broker-d6dda5dfb801bd617e5d</code></td><td style="text-align:right">0</td><td style="white-space:nowrap">40m – 40m</td></tr>
@@ -155,37 +147,29 @@
 </tbody>
 </table>
 
-
 > 18 instance group(s) have `serial:false` — they may update in parallel, so real time can come in under the (conservative serial) estimate.
 
-
-## CA rotations (3-phase)
-
+## CA rotations
 
 <table>
-<colgroup><col style="width:82%"><col style="width:18%"></colgroup>
-<thead><tr><th>Certificate</th><th>Expires</th></tr></thead>
+<colgroup><col style="width:54%"><col style="width:28%"><col style="width:18%"></colgroup>
+<thead><tr><th>Certificate</th><th>Rotation</th><th>Expires</th></tr></thead>
 <tbody>
-<tr><td><code>/services/tls_ca</code></td><td style="white-space:nowrap">2026-07-11T06:24:57Z</td></tr>
+<tr><td><code>.security_configuration.trusted_certificates[1]</code></td><td>1× foundation-wide</td><td style="white-space:nowrap">2026-07-11T06:24:57Z</td></tr>
+<tr><td><code>/services/tls_ca</code></td><td>2× foundation + 1× deployment</td><td style="white-space:nowrap">2026-07-11T06:24:57Z</td></tr>
 </tbody>
 </table>
 
-
 ## Leaf certificates
-
 
 | Deployment | Leaf certs |
 |---|---:|
-| `p-bosh (not VM-counted)` | 1 |
 | `cf-faf3d38a0032988a4dc2` | 3 |
 | `p-healthwatch2-e6fa153a2da23c59222b` | 1 |
 
-
 ## Operator-supplied certificates — require Digicert
 
-
 > Not auto-generated. A new certificate must be obtained from Digicert before rotation (out-of-band; not included in the Apply Changes time above).
-
 
 <table>
 <colgroup><col style="width:82%"><col style="width:18%"></colgroup>
@@ -199,20 +183,16 @@
 </tbody>
 </table>
 
-
 ## Estimate breakdown
-
 
 | Campaign | Applies | Time (low – high) |
 |---|---|---|
 | Leaf certs | folded into the shared apply #2 | included |
-| CA certs (full batch) | 2× foundation-wide on all tiles — all CAs + leaves | 48h 16m – 119h 40m |
-| **Total** | | **48h 16m – 119h 40m** |
-
+| CA certs (full batch) | 2× foundation-wide on all tiles — all CAs + leaves | 48h 08m – 119h 20m |
+| **Total** | | **48h 08m – 119h 20m** |
 
 ## Model & assumptions
 
-
 - 20m overhead per Apply Changes; 4–10m per VM.
-- A FOUNDATION CA = 3 foundation-wide applies; a services TLS CA = 2 foundation + 1 deployment applies; a deployment CA = 3 on its deployment.
+- A FOUNDATION CA = 3 foundation-wide applies; a services TLS CA = 2 foundation + 1 deployment applies; a BOSH trusted-store CA = 1 foundation-wide apply (swap in place); a deployment CA = 3 on its deployment.
 - Estimate is **Apply Changes compute time only** — it excludes change-window / approval gaps between phases, which often dominate the wall-clock for CA rotations.
