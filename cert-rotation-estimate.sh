@@ -652,14 +652,21 @@ fi
 # regen phases stay per-CA. Un-batched (CA_BATCH=0) costs every CA in full.
 FND_LO="$(scope_minutes low  "${DEPS[@]}")"   # one foundation-wide Apply (low)
 FND_HI="$(scope_minutes high "${DEPS[@]}")"   # one foundation-wide Apply (high)
-nf=0; nt=0; nd=0; max_fnd_phases=0
+# Services TLS CA phase 2 (regenerate its leaf certs) recreates every tile EXCEPT
+# the cf tile — cf uses none of the leaf certs that CA signs. One apply over all
+# deployments whose product type is not `cf`.
+NONCF_DEPS=()
+for _d in "${DEPS[@]}"; do [[ "${PROD_TYPE[$_d]:-}" == "cf" ]] || NONCF_DEPS+=("$_d"); done
+FND_NOCF_LO="$(scope_minutes low  "${NONCF_DEPS[@]}")"
+FND_NOCF_HI="$(scope_minutes high "${NONCF_DEPS[@]}")"
+nf=0; nt=0; nd=0; n_trusted=0; n_trust=0; max_fnd_phases=0; ca_regen_noncf=0
 ca_dep_lo=0; ca_dep_hi=0; nonbatch_lo=0; nonbatch_hi=0
 for i in "${!CA_MODEL[@]}"; do
   model="${CA_MODEL[$i]}"; dep="${CA_DEP[$i]}"
   case "$model" in
     FOUNDATION) fph=$CA_APPLY_COUNT;          dph=0;                       nf=$((nf+1));;
-    TRUSTED)    fph=$SERVICES_CA_FND_APPLIES; dph=$SERVICES_CA_DEP_APPLIES; nt=$((nt+1));;
-    TRUST)      fph=$TRUST_CA_FND_APPLIES;    dph=0;                       nt=$((nt+1));;
+    TRUSTED)    fph=$SERVICES_CA_FND_APPLIES; dph=$SERVICES_CA_DEP_APPLIES; nt=$((nt+1)); n_trusted=$((n_trusted+1));;
+    TRUST)      fph=$TRUST_CA_FND_APPLIES;    dph=0;                       nt=$((nt+1)); n_trust=$((n_trust+1));;
     DEPLOYMENT) fph=0;                        dph=$DEP_CA_APPLIES;         nd=$((nd+1));;
   esac
   # dep may be "__FND__" or a space-separated deployment list (from maestro).
@@ -687,11 +694,19 @@ if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
     ca_lo="$(awk -v x="$nonbatch_lo" 'BEGIN{printf "%.1f", x}')"
     ca_hi="$(awk -v x="$nonbatch_hi" 'BEGIN{printf "%.1f", x}')"
   elif [[ "$CA_BATCH" == "2" && $max_fnd_phases -gt 0 ]]; then
-    # Full batch: one shared campaign on all tiles. Add all new CAs + regen all
-    # leaves (incl. leaf certs) fold into the immediate foundation-wide applies;
-    # the old-CA removal is the deferred apply when DEFER_CA_REMOVAL=1.
+    # Full batch: one shared campaign on all tiles. The foundation-wide add/remove
+    # applies (imm_fnd) recreate every VM; leaf certs fold into them. The old-CA
+    # removal is the deferred apply when DEFER_CA_REMOVAL=1.
     ca_lo="$(awk -v f="$imm_fnd" -v fp="$FND_LO" 'BEGIN{printf "%.1f", f*fp}')"
     ca_hi="$(awk -v f="$imm_fnd" -v fp="$FND_HI" 'BEGIN{printf "%.1f", f*fp}')"
+    # A services TLS CA additionally needs a leaf-regen apply over every tile
+    # EXCEPT cf (phase 2). A FOUNDATION CA already regenerates foundation-wide
+    # (folded into imm_fnd), so add this only when no FOUNDATION CA is rotating.
+    if [[ $n_trusted -gt 0 && $nf -eq 0 ]]; then
+      ca_lo="$(awk -v c="$ca_lo" -v r="$FND_NOCF_LO" 'BEGIN{printf "%.1f", c+r}')"
+      ca_hi="$(awk -v c="$ca_hi" -v r="$FND_NOCF_HI" 'BEGIN{printf "%.1f", c+r}')"
+      ca_regen_noncf=1
+    fi
     leaf_absorbed=1
   else
     # Shared foundation applies; deployment-scoped CAs costed on top (also the
@@ -708,6 +723,7 @@ if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
     0) info "  Un-batched: each CA's foundation applies costed separately";;
     2) if [[ $leaf_absorbed -eq 1 ]]; then
          info "  Full batch: ${imm_fnd}x foundation-wide Apply on all tiles ($(fmt_min "$FND_LO")–$(fmt_min "$FND_HI") each, ${TOTAL_VMS} VMs) — all CAs + leaf regen folded in"
+         [[ $ca_regen_noncf -eq 1 ]] && info "  + 1x services TLS CA leaf-regen Apply on all tiles EXCEPT cf ($(fmt_min "$FND_NOCF_LO")–$(fmt_min "$FND_NOCF_HI"))"
        else
          info "  Full batch requested but no foundation-wide apply present — costing per-deployment instead"
        fi;;
@@ -843,8 +859,12 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf '<thead><tr><th>Deployment</th><th style="text-align:right">VMs</th><th>Est. cert-rotation time</th></tr></thead>\n<tbody>\n'
     for dep in "${DEPS[@]}"; do
       if [[ ${imm_fnd:-0} -gt 0 ]]; then
-        dlo="$(napply "$imm_fnd" "$(scope_minutes low  "$dep")")"
-        dhi="$(napply "$imm_fnd" "$(scope_minutes high "$dep")")"
+        # Foundation-wide CA applies recreate every VM. A services TLS CA also
+        # recreates every tile EXCEPT cf one extra time (its phase-2 leaf regen).
+        rec=$imm_fnd
+        [[ $ca_regen_noncf -eq 1 && "${PROD_TYPE[$dep]:-}" != "cf" ]] && rec=$((rec+1))
+        dlo="$(napply "$rec" "$(scope_minutes low  "$dep")")"
+        dhi="$(napply "$rec" "$(scope_minutes high "$dep")")"
         dtime="$(fmt_min "$dlo") – $(fmt_min "$dhi")"
       else
         depkeys=(); for key in "${!LEAF_PAIR[@]}"; do [[ "$key" == "${dep}${SEP}"* ]] && depkeys+=("$key"); done
@@ -923,8 +943,10 @@ if [[ $MD_MODE -eq 1 ]]; then
       case "$CA_BATCH" in
         0) printf '| CA certs (un-batched) | each CA costed separately | %s – %s |\n' "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")";;
         2) if [[ "${leaf_absorbed:-0}" -eq 1 ]]; then
-             printf '| CA certs (full batch) | %d× foundation-wide on all tiles — all CAs + leaves | %s – %s |\n' \
-               "$max_fnd_phases" "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")"
+             applytxt="${max_fnd_phases}× foundation-wide on all tiles"
+             [[ $ca_regen_noncf -eq 1 ]] && applytxt="${applytxt} + 1× all tiles except cf (services TLS CA leaf regen)"
+             printf '| CA certs (full batch) | %s — all CAs + leaves | %s – %s |\n' \
+               "$applytxt" "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")"
            else
              printf '| CA certs (batched) | %d× foundation-wide + per-deployment | %s – %s |\n' \
                "$max_fnd_phases" "$(fmt_min "$ca_lo")" "$(fmt_min "$ca_hi")"
@@ -939,8 +961,8 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf -- '- %dm overhead per Apply Changes; %d–%dm per VM.\n' \
       "$APPLY_OVERHEAD_MIN" "$MIN_PER_VM_LOW" "$MIN_PER_VM_HIGH"
     [[ ${#OV_PAT[@]} -gt 0 ]] && printf -- '- Manual per-IG overrides active: `%s`.\n' "$(md_esc "$IG_RATE_OVERRIDES")"
-    printf -- '- A FOUNDATION CA = %d foundation-wide applies; a services TLS CA = %d foundation + %d deployment applies; a BOSH trusted-store CA = %d foundation-wide apply (swap in place); a deployment CA = %d on its deployment.\n' \
-      "$CA_APPLY_COUNT" "$SERVICES_CA_FND_APPLIES" "$SERVICES_CA_DEP_APPLIES" "$TRUST_CA_FND_APPLIES" "$DEP_CA_APPLIES"
+    printf -- '- A FOUNDATION CA = %d foundation-wide applies; a services TLS CA = 2 foundation-wide applies (propagate new CA, delete old CA) + 1 apply over every tile EXCEPT cf (regenerate its leaf certs); a BOSH trusted-store CA = %d foundation-wide apply (swap in place); a deployment CA = %d on its deployment.\n' \
+      "$CA_APPLY_COUNT" "$TRUST_CA_FND_APPLIES" "$DEP_CA_APPLIES"
     printf -- '- Estimate is **Apply Changes compute time only** — it excludes change-window / approval gaps between phases, which often dominate the wall-clock for CA rotations.\n'
   } >&3
 fi
