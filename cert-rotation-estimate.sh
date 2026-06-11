@@ -127,6 +127,11 @@ LEAF_APPLY_COUNT=${LEAF_APPLY_COUNT:-1}    # leaf rotation: regenerate -> 1 appl
 SERVICES_CA_FND_APPLIES=${SERVICES_CA_FND_APPLIES:-2}   # the add + the remove
 SERVICES_CA_DEP_APPLIES=${SERVICES_CA_DEP_APPLIES:-1}   # the leaf regeneration
 DEP_CA_APPLIES=${DEP_CA_APPLIES:-3}        # DEPLOYMENT-scoped CA: 3 applies on its dep
+# TRUST-STORE CA (a CA in the BOSH trusted_certificates store, excluding the
+# services TLS CA): swapping old-for-new is a SINGLE config change, so one
+# foundation-wide Apply Changes propagates it to every VM. No leaf-regen (it signs
+# external-service leaves) and no separate removal phase.
+TRUST_CA_FND_APPLIES=${TRUST_CA_FND_APPLIES:-1}
 
 # How CA rotations share Apply Changes:
 #   0 = none: every CA costed in full, separately (worst case).
@@ -153,11 +158,13 @@ DEFER_CA_REMOVAL=${DEFER_CA_REMOVAL:-0}
 CA_PROCEDURE_RE=${CA_PROCEDURE_RE:-'CA Procedure'}
 # Fallback CA detection on the label, for a cert with is_ca=true but no procedure.
 CA_ROTATION_3X_RE=${CA_ROTATION_3X_RE:-'(root_ca|services.?tls.?ca|/tls_ca|trusted_cert|_ca$)'}
-# Which scope model a CA takes. TRUSTED-CERTS (services TLS CA) is checked FIRST so
-# it wins over the broad foundation pattern. FOUNDATION is the genuine all-VM trust
-# anchors only; everything else falls through to DEPLOYMENT-scoped (owning product).
+# Which scope model a CA takes, checked in order: TRUSTED-CERTS (services TLS CA,
+# 2 foundation + 1 deployment), then TRUST-STORE (a plain trusted_certificates CA,
+# 1 foundation-wide apply), then FOUNDATION (genuine all-VM trust anchors, 3
+# foundation-wide); everything else is DEPLOYMENT-scoped (owning product).
 CA_TRUSTED_CERTS_RE=${CA_TRUSTED_CERTS_RE:-'(services.?tls.?ca|/services/tls_ca|Services TLS CA)'}
-CA_FOUNDATION_RE=${CA_FOUNDATION_RE:-'(properties\.root_ca|properties\.nats_client_ca|bosh_dns/tls_ca|/opsmgr/.*tls_ca|trusted_cert)'}
+CA_TRUST_STORE_RE=${CA_TRUST_STORE_RE:-'trusted_cert'}
+CA_FOUNDATION_RE=${CA_FOUNDATION_RE:-'(properties\.root_ca|properties\.nats_client_ca|bosh_dns/tls_ca|/opsmgr/.*tls_ca)'}
 
 # --- Leaf cert IG-scoping ---------------------------------------------------
 # A leaf cert is consumed by SPECIFIC instance group(s), not the whole tile, so
@@ -488,10 +495,13 @@ emit_sev(){ # level message  -> calls the right logger and bumps counters
 #   TRUSTED    services TLS CA — add/remove via BOSH trusted certs (foundation),
 #              leaf regen on the owning deployment. (checked first: it would also
 #              match the broad foundation pattern, but its model is different.)
+#   TRUST      a plain CA in the BOSH trusted_certificates store — one foundation-
+#              wide apply swaps old-for-new; no leaf regen, no separate removal.
 #   FOUNDATION genuine all-VM trust anchor — every phase foundation-wide.
 #   DEPLOYMENT everything else — every phase on the owning deployment only.
 ca_scope_model(){ # label proc
   if grep -qiE "$CA_TRUSTED_CERTS_RE" <<<"$1 $2"; then echo TRUSTED
+  elif grep -qiE "$CA_TRUST_STORE_RE" <<<"$1"; then echo TRUST
   elif grep -qiE "$CA_FOUNDATION_RE" <<<"$1"; then echo FOUNDATION
   else echo DEPLOYMENT; fi
 }
@@ -500,6 +510,7 @@ ca_plan_text(){ # model dep
   case "$1" in
     FOUNDATION) echo "${CA_APPLY_COUNT}x foundation-wide";;
     TRUSTED)    echo "${SERVICES_CA_FND_APPLIES}x foundation-wide (BOSH trusted-certs add+remove) + ${SERVICES_CA_DEP_APPLIES}x ${2}";;
+    TRUST)      echo "${TRUST_CA_FND_APPLIES}x foundation-wide (swap CA in BOSH trusted certs)";;
     DEPLOYMENT) echo "${DEP_CA_APPLIES}x ${2}";;
   esac
 }
@@ -536,7 +547,9 @@ else
       #   2. else the cert's own product_guid, if it names a live deployment
       #   3. else foundation-wide (conservative; can't scope it any tighter)
       dep="__FND__"; depnote=""
-      if [[ "$model" != FOUNDATION ]]; then
+      # FOUNDATION and TRUST are purely foundation-wide (no deployment-scoped
+      # phase), so they stay __FND__; only the others resolve an owning deployment.
+      if [[ "$model" != FOUNDATION && "$model" != TRUST ]]; then
         mdeps="$(maestro_ca_deps "$pref")"
         if [[ -n "$mdeps" ]]; then dep="$mdeps"; depnote=" (scoped via maestro tp)"
         elif [[ -n "${VM_BY_DEP[$pguid]:-}" ]]; then dep="$pguid"
@@ -628,9 +641,10 @@ ca_dep_lo=0; ca_dep_hi=0; nonbatch_lo=0; nonbatch_hi=0
 for i in "${!CA_MODEL[@]}"; do
   model="${CA_MODEL[$i]}"; dep="${CA_DEP[$i]}"
   case "$model" in
-    FOUNDATION) fph=$CA_APPLY_COUNT;        dph=0;                     nf=$((nf+1));;
+    FOUNDATION) fph=$CA_APPLY_COUNT;          dph=0;                       nf=$((nf+1));;
     TRUSTED)    fph=$SERVICES_CA_FND_APPLIES; dph=$SERVICES_CA_DEP_APPLIES; nt=$((nt+1));;
-    DEPLOYMENT) fph=0;                      dph=$DEP_CA_APPLIES;       nd=$((nd+1));;
+    TRUST)      fph=$TRUST_CA_FND_APPLIES;    dph=0;                       nt=$((nt+1));;
+    DEPLOYMENT) fph=0;                        dph=$DEP_CA_APPLIES;         nd=$((nd+1));;
   esac
   # dep may be "__FND__" or a space-separated deployment list (from maestro).
   if [[ "$dep" == "__FND__" ]]; then od_lo="$FND_LO"; od_hi="$FND_HI"
@@ -879,8 +893,8 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf -- '- %dm overhead per Apply Changes; %d–%dm per VM.\n' \
       "$APPLY_OVERHEAD_MIN" "$MIN_PER_VM_LOW" "$MIN_PER_VM_HIGH"
     [[ ${#OV_PAT[@]} -gt 0 ]] && printf -- '- Manual per-IG overrides active: `%s`.\n' "$(md_esc "$IG_RATE_OVERRIDES")"
-    printf -- '- A FOUNDATION CA = %d foundation-wide applies; a services TLS CA = %d foundation + %d deployment applies; a deployment CA = %d on its deployment.\n' \
-      "$CA_APPLY_COUNT" "$SERVICES_CA_FND_APPLIES" "$SERVICES_CA_DEP_APPLIES" "$DEP_CA_APPLIES"
+    printf -- '- A FOUNDATION CA = %d foundation-wide applies; a services TLS CA = %d foundation + %d deployment applies; a BOSH trusted-store CA = %d foundation-wide apply (swap in place); a deployment CA = %d on its deployment.\n' \
+      "$CA_APPLY_COUNT" "$SERVICES_CA_FND_APPLIES" "$SERVICES_CA_DEP_APPLIES" "$TRUST_CA_FND_APPLIES" "$DEP_CA_APPLIES"
     printf -- '- Estimate is **Apply Changes compute time only** — it excludes change-window / approval gaps between phases, which often dominate the wall-clock for CA rotations.\n'
   } >&3
 fi
