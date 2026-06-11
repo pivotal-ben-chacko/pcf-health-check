@@ -522,7 +522,7 @@ ca_plan_text(){ # model dep
 ca_plan_short(){ # model
   case "$1" in
     FOUNDATION) echo "${CA_APPLY_COUNT}× foundation-wide";;
-    TRUSTED)    echo "${SERVICES_CA_FND_APPLIES}× foundation + ${SERVICES_CA_DEP_APPLIES}× deployment";;
+    TRUSTED)    echo "${SERVICES_CA_FND_APPLIES}× foundation + ${SERVICES_CA_DEP_APPLIES}× all-but-cf";;
     TRUST)      echo "${TRUST_CA_FND_APPLIES}× foundation-wide";;
     DEPLOYMENT) echo "${DEP_CA_APPLIES}× on deployment";;
   esac
