@@ -790,7 +790,7 @@ if [[ $MD_MODE -eq 1 ]]; then
 
     printf '## Summary\n\n'
     printf '| Metric | Value |\n|---|---|\n'
-    printf '| Expiring certs (%s) | %d (❌ %d · ⚠️ %d) |\n' "$HORIZON_TEXT" "$((N_LEAF+N_CA))" "$N_CRIT" "$N_WARN"
+    printf '| Expiring certs (%s) | %d |\n' "$HORIZON_TEXT" "$((N_LEAF+N_CA))"
     printf '| — leaf / CA | %d / %d |\n' "$N_LEAF" "$N_CA"
     [[ ${#CFG_LABEL[@]} -gt 0 ]] && printf '| — require Digicert (operator-supplied) | %d |\n' "${#CFG_LABEL[@]}"
     printf '| Live VMs | %d |\n' "$TOTAL_VMS"
