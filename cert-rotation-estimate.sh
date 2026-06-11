@@ -885,6 +885,19 @@ if [[ $MD_MODE -eq 1 ]]; then
       printf '\n'
     fi
 
+    # The actual rotation footprint: which instance groups get recreated and how
+    # many VMs each holds — this is exactly what the leaf estimate is costed over
+    # (skipped when leaves fold into a foundation-wide CA apply, which recreates all).
+    if [[ ${#leaf_keys[@]} -gt 0 && "${leaf_absorbed:-0}" -ne 1 ]]; then
+      printf '## Leaf rotation scope (instance groups recreated)\n\n'
+      printf '> A leaf rotation recreates only the instance group(s) that consume the cert — these VMs, not the whole deployment.\n\n'
+      printf '| Instance group | Deployment | VMs |\n|---|---|---:|\n'
+      while IFS= read -r key; do
+        printf '| `%s` | `%s` | %d |\n' "${key#*$SEP}" "$(md_esc "${key%%$SEP*}")" "${IG_VMS[$key]:-0}"
+      done < <(printf '%s\n' "${leaf_keys[@]}" | sort)
+      printf '| **Total VMs recreated** | | **%d** |\n\n' "$LEAF_SCOPE_VMS"
+    fi
+
     if [[ ${#CFG_LABEL[@]} -gt 0 ]]; then
       printf '## Operator-supplied certificates — require Digicert\n\n'
       printf '> Not auto-generated. A new certificate must be obtained from Digicert before rotation (out-of-band; not included in the Apply Changes time above).\n\n'
