@@ -808,7 +808,8 @@ if [[ $MD_MODE -eq 1 ]]; then
 
     # Consolidated list of every expiring cert (leaf + CA), sorted soonest-first.
     if [[ ${#EXP_CERTS[@]} -gt 0 ]]; then
-      printf '## Expiring certificates (within %s)\n\n' "$HORIZON_TEXT"
+      if [[ $WINDOW_IS_ALL -eq 1 ]]; then printf '## Expiring certificates\n\n'
+      else printf '## Expiring certificates (within %s)\n\n' "$HORIZON_TEXT"; fi
       printf '<table>\n<colgroup><col style="width:60%%"><col style="width:15%%"><col style="width:25%%"></colgroup>\n'
       printf '<thead><tr><th>Certificate</th><th>Type</th><th>Expires</th></tr></thead>\n<tbody>\n'
       while IFS=$'\t' read -r xdate xkind xlabel; do
