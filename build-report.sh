@@ -5,9 +5,11 @@
 #   ./build-report.sh            # health check  -> health-report.{md,html,pdf}
 #   ./build-report.sh health     # same as above
 #   ./build-report.sh cert       # cert rotation -> cert-rotation-report.{md,html,pdf}
-#   FOUNDATION=FOG ./build-report.sh cert   # set the foundation name in the title
+#   ./build-report.sh render FILE.md         # render an existing local .md (no SSH)
+#   FOUNDATION=FOG ./build-report.sh cert    # set the foundation name in the title
+#   TITLE='My Title' ./build-report.sh render FILE.md   # override the HTML page title
 #
-# Pipeline: <script> --markdown  (on opsman, over SSH)
+# Pipeline: <script> --markdown  (on opsman, over SSH)   [skipped in render mode]
 #        -> <out>.md
 #        -> pandoc (standalone, embedded CSS)  -> <out>.html
 #        -> Chrome headless --print-to-pdf     -> <out>.pdf
@@ -15,9 +17,11 @@
 # Requires (on this Mac): pandoc and Google Chrome. Run from the repo directory.
 
 set -euo pipefail
+ORIG_DIR="$PWD"
 cd "$(dirname "$0")"
 
 MODE="${1:-health}"
+MD_FILE=""   # render mode sets this directly; remote modes derive it after the run
 case "$MODE" in
   health)
     REMOTE_SCRIPT='~/pcf-health-check.sh'; OUT='health-report'
@@ -25,8 +29,16 @@ case "$MODE" in
   cert|cert-rotation)
     REMOTE_SCRIPT='~/cert-rotation-estimate.sh'; OUT='cert-rotation-report'
     TITLE_SUFFIX='Certificate Rotation Estimate'; VALIDATE='Certificate Rotation Estimate';;
+  render)
+    # Render an existing local Markdown file through the branded toolchain only —
+    # no SSH, no remote run. Useful when the .md was produced elsewhere.
+    SRC="${2:-}"
+    [[ -n "$SRC" ]] || { echo "usage: $0 render <file.md>" >&2; exit 2; }
+    [[ "$SRC" = /* ]] || SRC="$ORIG_DIR/$SRC"   # resolve against the caller's dir
+    [[ -f "$SRC" ]] || { echo "ERROR: no such file: $SRC" >&2; exit 2; }
+    MD_FILE="$SRC"; OUT="$(basename "${SRC%.md}")"; VALIDATE='';;
   *)
-    echo "usage: $0 [health|cert]   (default: health)" >&2; exit 2;;
+    echo "usage: $0 [health|cert|render <file.md>]   (default: health)" >&2; exit 2;;
 esac
 
 OPSMAN="${OPSMAN:-ubuntu@192.168.2.85}"
@@ -34,21 +46,35 @@ KEY="${KEY:-$HOME/.ssh/id_ed25519}"
 CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 # Foundation name for the report title (e.g. FOUNDATION=FOG ./build-report.sh cert).
 FOUNDATION="${FOUNDATION:-}"
-PAGETITLE="PCF${FOUNDATION:+ $FOUNDATION} ${TITLE_SUFFIX}"
+# Page title precedence: explicit TITLE env > derived. In render mode, derive from
+# the document's first H1 so the PDF title matches the report's own heading.
+if [[ -n "${TITLE:-}" ]]; then
+  PAGETITLE="$TITLE"
+elif [[ "$MODE" == render ]]; then
+  PAGETITLE="$(sed -n 's/^# //p' "$MD_FILE" | head -1)"
+  PAGETITLE="${PAGETITLE:-PCF${FOUNDATION:+ $FOUNDATION} Report}"
+else
+  PAGETITLE="PCF${FOUNDATION:+ $FOUNDATION} ${TITLE_SUFFIX}"
+fi
 SSH_OPTS=(-o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i "$KEY")
 
-echo "[1/3] Running ${MODE} report on ${OPSMAN} ..."
-# Both scripts exit 0/1/2 (clean/warnings/critical); a non-zero verdict is not a
-# build failure, so don't let pipefail+set -e abort here. Validate by content.
-REMOTE_CMD="${REMOTE_SCRIPT} --markdown"
-[[ -n "$FOUNDATION" ]] && REMOTE_CMD="FOUNDATION_NAME='${FOUNDATION}' ${REMOTE_CMD}"
-ssh "${SSH_OPTS[@]}" "$OPSMAN" "$REMOTE_CMD" 2>/dev/null \
-  | grep -v 'Unauthorized use\|subject to logging' > "${OUT}.md" || true
-grep -q "$VALIDATE" "${OUT}.md" || { echo "ERROR: report incomplete (no '${VALIDATE}')"; exit 1; }
-echo "      -> ${OUT}.md ($(wc -l < "${OUT}.md") lines)"
+if [[ "$MODE" == render ]]; then
+  echo "[1/3] Using local markdown ${MD_FILE} (skipping opsman run) ..."
+else
+  echo "[1/3] Running ${MODE} report on ${OPSMAN} ..."
+  # Both scripts exit 0/1/2 (clean/warnings/critical); a non-zero verdict is not a
+  # build failure, so don't let pipefail+set -e abort here. Validate by content.
+  REMOTE_CMD="${REMOTE_SCRIPT} --markdown"
+  [[ -n "$FOUNDATION" ]] && REMOTE_CMD="FOUNDATION_NAME='${FOUNDATION}' ${REMOTE_CMD}"
+  ssh "${SSH_OPTS[@]}" "$OPSMAN" "$REMOTE_CMD" 2>/dev/null \
+    | grep -v 'Unauthorized use\|subject to logging' > "${OUT}.md" || true
+  grep -q "$VALIDATE" "${OUT}.md" || { echo "ERROR: report incomplete (no '${VALIDATE}')"; exit 1; }
+  MD_FILE="${OUT}.md"
+  echo "      -> ${OUT}.md ($(wc -l < "${OUT}.md") lines)"
+fi
 
 echo "[2/3] pandoc -> HTML ..."
-pandoc "${OUT}.md" -o "${OUT}.html" --standalone --embed-resources \
+pandoc "$MD_FILE" -o "${OUT}.html" --standalone --embed-resources \
   --metadata pagetitle="$PAGETITLE" -c report-style.css \
   --include-before-body report-header.html
 
@@ -56,4 +82,4 @@ echo "[3/3] Chrome headless -> PDF ..."
 "$CHROME" --headless=new --disable-gpu --no-pdf-header-footer \
   --print-to-pdf="${OUT}.pdf" "file://$PWD/${OUT}.html" 2>/dev/null
 
-echo "Done:"; ls -lh "${OUT}.md" "${OUT}.html" "${OUT}.pdf" | awk '{print "  "$9"  "$5}'
+echo "Done:"; ls -lh "$MD_FILE" "${OUT}.html" "${OUT}.pdf" | awk '{print "  "$9"  "$5}'

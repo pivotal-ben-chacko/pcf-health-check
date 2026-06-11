@@ -164,6 +164,15 @@ tr:nth-child(odd) td {
   background-color: #FFFFFF;
 }
 
+/* Identifiers in table cells (deployment GUIDs, cert paths) stay on one line so
+   the column widens to fit them, instead of break-all chopping names
+   mid-character across multiple rows (the global `code` rule below is for prose
+   and <pre> blocks, where breaking anywhere is desirable). */
+td code {
+  white-space: nowrap;
+  word-break: normal;
+}
+
 /* Links */
 a {
   color: #FF6600;

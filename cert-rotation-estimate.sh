@@ -152,12 +152,37 @@ DEFER_CA_REMOVAL=${DEFER_CA_REMOVAL:-0}
 # is the 3-Apply CA dance. Leaf/SAML procedures take the 1-Apply path.
 CA_PROCEDURE_RE=${CA_PROCEDURE_RE:-'CA Procedure'}
 # Fallback CA detection on the label, for a cert with is_ca=true but no procedure.
-CA_ROTATION_3X_RE=${CA_ROTATION_3X_RE:-'(root_ca|services.?tls.?ca|/tls_ca|trusted_certs|_ca$)'}
+CA_ROTATION_3X_RE=${CA_ROTATION_3X_RE:-'(root_ca|services.?tls.?ca|/tls_ca|trusted_cert|_ca$)'}
 # Which scope model a CA takes. TRUSTED-CERTS (services TLS CA) is checked FIRST so
 # it wins over the broad foundation pattern. FOUNDATION is the genuine all-VM trust
 # anchors only; everything else falls through to DEPLOYMENT-scoped (owning product).
 CA_TRUSTED_CERTS_RE=${CA_TRUSTED_CERTS_RE:-'(services.?tls.?ca|/services/tls_ca|Services TLS CA)'}
-CA_FOUNDATION_RE=${CA_FOUNDATION_RE:-'(properties\.root_ca|properties\.nats_client_ca|bosh_dns/tls_ca|/opsmgr/.*tls_ca)'}
+CA_FOUNDATION_RE=${CA_FOUNDATION_RE:-'(properties\.root_ca|properties\.nats_client_ca|bosh_dns/tls_ca|/opsmgr/.*tls_ca|trusted_cert)'}
+
+# --- Leaf cert IG-scoping ---------------------------------------------------
+# A leaf cert is consumed by SPECIFIC instance group(s), not the whole tile, so
+# rotating it only recreates those IGs (an Apply Changes redeploys the tile but
+# BOSH restarts just the jobs whose cert content changed). Map a cert-label regex
+# to an IG-name regex; the leaf campaign then costs only the matching IGs.
+# UNMAPPED certs fall back to the whole deployment (conservative — never silently
+# under-counts). USE_IG_SCOPE=0 forces the old whole-deployment behavior.
+# Verified on a live cf manifest: networking/PoE front-door cert -> only `router`;
+# uaa.service_provider_key -> only `uaa` (`control` in small-footprint). NOTE: a CA
+# dropped into `trusted_certificates` is distributed foundation-wide, so it is
+# deliberately NOT mapped here and stays whole-scope.
+USE_IG_SCOPE=${USE_IG_SCOPE:-1}
+CERTIG_PAT=(); CERTIG_IG=()
+# CERT_IG_SCOPE (env, space/comma list of "labelRe=igRe") is prepended -> wins.
+for _ent in ${CERT_IG_SCOPE:+${CERT_IG_SCOPE//,/ }}; do
+  [[ "$_ent" == *=* ]] || continue
+  CERTIG_PAT+=("${_ent%%=*}"); CERTIG_IG+=("${_ent#*=}")
+done
+# Built-in TAS defaults (case-insensitive; first match wins).
+CERTIG_PAT+=('networking_poe');       CERTIG_IG+=('^(router|ha_proxy|tcp_router)$')
+CERTIG_PAT+=('routing_custom_ca');    CERTIG_IG+=('^router$')
+CERTIG_PAT+=('router_ssl|gorouter');  CERTIG_IG+=('^router$')
+CERTIG_PAT+=('service_provider_key'); CERTIG_IG+=('^(uaa|control)$')
+CERTIG_PAT+=('grafana');              CERTIG_IG+=('grafana')
 
 # ---------------------------------------------------------------------------
 # Presentation
@@ -211,40 +236,72 @@ die(){  printf '\n%s[FATAL]%s %s\n' "$R" "$RST" "$1" >&2; exit 2; }
 # minutes -> "2h 35m" (or "45m")
 fmt_min(){ awk -v m="$1" 'BEGIN{ m=int(m+0.5); h=int(m/60); r=m%60;
   if(h>0) printf "%dh %02dm", h, r; else printf "%dm", r }'; }
-# Minutes for ONE Apply Changes over the given deployments. Every VM costs the same
-# rate (unless a manual IG_RATE_OVERRIDES pattern matches its instance group). The
-# PARALLELISM (max_in_flight, possibly "N%") and canary count come from the real
-# manifest `update` block (IG_MIF/IG_CAN from §1) when present, else the fallback.
-# per-IG = canaries*rate + ceil((n-canaries)/max_in_flight)*rate.
-# `which` selects the low or high per-VM cost.
+# Minutes to recreate ONE instance group's VMs in a single apply (no per-apply
+# overhead). Every VM costs the same rate (unless an IG_RATE_OVERRIDES pattern
+# matches the group). PARALLELISM (max_in_flight, possibly "N%") and canary count
+# come from the real manifest `update` block (IG_MIF/IG_CAN from §1) when present,
+# else the fallback. per-IG = canaries*rate + ceil((n-canaries)/max_in_flight)*rate.
+ig_minutes(){ # which(low|high) dep grp
+  local which=$1 grp=$3 key="$2$SEP$3"
+  local cnt="${IG_VMS[$key]:-0}"
+  [[ "${cnt:-0}" -gt 0 ]] || { printf '0'; return; }
+  local nrate; if [[ "$which" == high ]]; then nrate=$MIN_PER_VM_HIGH; else nrate=$MIN_PER_VM_LOW; fi
+  local ovrate="" oi
+  for oi in "${!OV_PAT[@]}"; do
+    grep -qiE "${OV_PAT[$oi]}" <<<"$grp" || continue
+    ovrate="$([[ "$which" == high ]] && echo "${OV_HI[$oi]}" || echo "${OV_LO[$oi]}")"; break
+  done
+  local rate="${ovrate:-$nrate}" mraw="${IG_MIF[$key]:-}" can="${IG_CAN[$key]:-}"
+  awk -v c="$cnt" -v r="$rate" -v mraw="$mraw" -v can="$can" -v dm="$MAX_IN_FLIGHT" 'BEGIN{
+    if (mraw=="") mif=dm;
+    else if (mraw ~ /%$/) { p=mraw; sub(/%$/,"",p); mif=int((c*p+99)/100) }
+    else mif=mraw+0;
+    if (mif<1) mif=1;
+    cn=(can=="")?0:can+0; if(cn>c)cn=c; if(cn<0)cn=0;
+    rest=c-cn; b=(rest>0)?int((rest+mif-1)/mif):0;
+    printf "%.4f", cn*r + b*r }'
+}
+# Minutes for ONE Apply Changes over whole deployments (every live IG). +overhead once.
 scope_minutes(){ # which(low|high)  dep1 [dep2 ...]
   local which=$1; shift
-  local nrate
-  if [[ "$which" == high ]]; then nrate=$MIN_PER_VM_HIGH; else nrate=$MIN_PER_VM_LOW; fi
-  local total=0 d key grp cnt rate mraw can ovrate oi
+  local total=0 d key grp
   for d in "$@"; do
     for key in "${!IG_VMS[@]}"; do
       [[ "$key" == "${d}${SEP}"* ]] || continue
-      grp="${key#*$SEP}"; cnt="${IG_VMS[$key]}"
-      # rate precedence: manual IG override > default rate.
-      ovrate=""
-      for oi in "${!OV_PAT[@]}"; do
-        grep -qiE "${OV_PAT[$oi]}" <<<"$grp" || continue
-        ovrate="$([[ "$which" == high ]] && echo "${OV_HI[$oi]}" || echo "${OV_LO[$oi]}")"; break
-      done
-      rate="${ovrate:-$nrate}"
-      mraw="${IG_MIF[$key]:-}"; can="${IG_CAN[$key]:-}"
-      total="$(awk -v t="$total" -v c="$cnt" -v r="$rate" -v mraw="$mraw" -v can="$can" -v dm="$MAX_IN_FLIGHT" 'BEGIN{
-        if (mraw=="") mif=dm;
-        else if (mraw ~ /%$/) { p=mraw; sub(/%$/,"",p); mif=int((c*p+99)/100) }
-        else mif=mraw+0;
-        if (mif<1) mif=1;
-        cn=(can=="")?0:can+0; if(cn>c)cn=c; if(cn<0)cn=0;
-        rest=c-cn; b=(rest>0)?int((rest+mif-1)/mif):0;
-        printf "%.4f", t + cn*r + b*r }')"
+      grp="${key#*$SEP}"
+      total="$(awk -v t="$total" -v b="$(ig_minutes "$which" "$d" "$grp")" 'BEGIN{printf "%.4f", t+b}')"
     done
   done
   awk -v t="$total" -v ov="$APPLY_OVERHEAD_MIN" 'BEGIN{ printf "%.1f", ov + t }'
+}
+# Minutes for ONE Apply Changes over an explicit set of "dep<SEP>ig" keys (the
+# IG-scoped leaf campaign). +overhead once. No keys -> just the overhead.
+scope_minutes_keys(){ # which(low|high)  key1 [key2 ...]
+  local which=$1; shift
+  local total=0 key d grp
+  for key in "$@"; do
+    d="${key%%$SEP*}"; grp="${key#*$SEP}"
+    total="$(awk -v t="$total" -v b="$(ig_minutes "$which" "$d" "$grp")" 'BEGIN{printf "%.4f", t+b}')"
+  done
+  awk -v t="$total" -v ov="$APPLY_OVERHEAD_MIN" 'BEGIN{ printf "%.1f", ov + t }'
+}
+# Echo the live IG name(s) in $dep that consume the leaf cert labelled $1 (via the
+# CERTIG map). Empty if scoping is off, the cert is unmapped, or no mapped IG has
+# live VMs in that deployment — the caller then falls back to whole-deployment.
+leaf_cert_igs(){ # label dep
+  [[ "$USE_IG_SCOPE" == "1" ]] || { printf ''; return; }
+  local label="$1" dep="$2" pat="" i key grp out=""
+  for i in "${!CERTIG_PAT[@]}"; do
+    grep -qiE "${CERTIG_PAT[$i]}" <<<"$label" || continue
+    pat="${CERTIG_IG[$i]}"; break
+  done
+  [[ -n "$pat" ]] || { printf ''; return; }
+  for key in "${!IG_VMS[@]}"; do
+    [[ "$key" == "${dep}${SEP}"* ]] || continue
+    grp="${key#*$SEP}"
+    grep -qiE "$pat" <<<"$grp" && out+="${out:+ }$grp"
+  done
+  printf '%s' "$out"
 }
 # n * a single-apply cost.
 napply(){ awk -v n="$1" -v p="$2" 'BEGIN{ printf "%.1f", n*p }'; }
@@ -414,6 +471,8 @@ certs_tsv="$(om curl -s -p "$CERT_QUERY" 2>/dev/null \
 N_LEAF=0; N_CA=0; N_CRIT=0; N_WARN=0
 declare -A LEAF_DEPS         # deployment -> 1, deployments touched by leaf rotations
 declare -A LEAF_BY_DEP       # deployment -> leaf-cert count (for the markdown report)
+declare -A LEAF_PAIR         # "dep<SEP>ig" -> 1, IG(s) a leaf rotation recreates
+declare -A LEAF_DEP_ALL      # deployment -> 1, has an unmapped leaf -> cost whole-dep
 # Parallel CA record arrays, one entry per CA rotation (consumed by §3 / report).
 CA_MODEL=(); CA_DEP=(); CA_LABEL=(); CA_SEV=(); CA_EXP=()
 # Operator-supplied (configurable) certs — these are NOT auto-generated; a new
@@ -464,6 +523,13 @@ else
     if { [[ -n "$proc" ]] && grep -qiE "$CA_PROCEDURE_RE" <<<"$proc"; } \
        || [[ "$is_ca" == "true" ]] || grep -qiE "$CA_ROTATION_3X_RE" <<<"$pref"; then
       N_CA=$((N_CA+1))
+      # A configurable CA dropped into the BOSH trusted certificates is externally
+      # supplied (e.g. a Digicert org CA) — still needs a new cert obtained
+      # out-of-band. Narrow to trusted-cert labels: other configurable CAs
+      # (root_ca, intermediates) are internally generated, not bought.
+      if [[ "$cfg" == "true" ]] && grep -qiE 'trusted_cert' <<<"$pref"; then
+        CFG_LABEL+=("$pref"); CFG_EXP+=("${vuntil:-—}"); digitag=" [requires Digicert]"
+      fi
       model="$(ca_scope_model "$pref" "$proc")"
       # Resolve the deployment(s) for the deployment-scoped phase(s):
       #   1. maestro tp — the deployments that actually host this CA's leaf certs
@@ -486,16 +552,24 @@ else
       if [[ "$cfg" == "true" ]]; then
         CFG_LABEL+=("$pref"); CFG_EXP+=("${vuntil:-—}"); digitag=" [requires Digicert]"
       fi
-      dep="$pguid"
+      dep="$pguid"; scopetag=""
       if [[ -n "${VM_BY_DEP[$dep]:-}" ]]; then
         LEAF_DEPS["$dep"]=1; LEAF_BY_DEP["$dep"]=$(( ${LEAF_BY_DEP[$dep]:-0} + 1 ))
+        # Scope the rotation to the instance group(s) that actually consume this
+        # cert; if it isn't in the map, cost the whole deployment (conservative).
+        igs="$(leaf_cert_igs "$pref" "$dep")"
+        if [[ -n "$igs" ]]; then
+          for g in $igs; do LEAF_PAIR["${dep}${SEP}${g}"]=1; done
+          scopetag=" → ${igs// /, }"
+        else
+          LEAF_DEP_ALL["$dep"]=1; scopetag=" → whole deployment"
+        fi
       else
         # e.g. the BOSH director's own certs (p-bosh) — not a countable deployment,
         # so excluded from the leaf cost scope; tallied separately for the report.
         LEAF_BY_DEP["${prod} (not VM-counted)"]=$(( ${LEAF_BY_DEP["${prod} (not VM-counted)"]:-0} + 1 ))
       fi
-      vmc="${VM_BY_DEP[$dep]:-?}"
-      emit_sev "$sev" "leaf ${pref} [${prod}] — ${dep} (${vmc} VMs, ${LEAF_APPLY_COUNT}x Apply Changes)${vuntil:+, expires ${vuntil}}${ptxt}${digitag}"
+      emit_sev "$sev" "leaf ${pref} [${prod}] — ${dep}${scopetag} (${LEAF_APPLY_COUNT}x Apply Changes)${vuntil:+, expires ${vuntil}}${ptxt}${digitag}"
     fi
   done <<<"$certs_tsv"
 fi
@@ -522,17 +596,22 @@ done < <(om curl -s -p /api/v0/certificate_authorities 2>/dev/null \
 # ---------------------------------------------------------------------------
 section "3. Estimated rotation time"
 
-# Leaf campaign: ONE Apply Changes over the union of affected deployments, costed
-# per instance group (so DB leaf certs are charged at the serial DB rate).
+# Leaf campaign: ONE Apply Changes over the consuming instance group(s) only —
+# rotating a leaf cert recreates just the IGs that reference it, not the whole
+# tile. Unmapped certs (LEAF_DEP_ALL) expand to every live IG of their deployment.
+for d in "${!LEAF_DEP_ALL[@]}"; do
+  for key in "${!IG_VMS[@]}"; do [[ "$key" == "${d}${SEP}"* ]] && LEAF_PAIR["$key"]=1; done
+done
 leaf_deps=("${!LEAF_DEPS[@]}")
+leaf_keys=("${!LEAF_PAIR[@]}")
 LEAF_SCOPE_VMS=0
-for d in "${leaf_deps[@]}"; do LEAF_SCOPE_VMS=$((LEAF_SCOPE_VMS + ${VM_BY_DEP[$d]:-0})); done
+for key in "${leaf_keys[@]}"; do LEAF_SCOPE_VMS=$((LEAF_SCOPE_VMS + ${IG_VMS[$key]:-0})); done
 
 leaf_lo=0; leaf_hi=0
-if [[ $N_LEAF -gt 0 ]]; then
-  leaf_lo="$(napply "$LEAF_APPLY_COUNT" "$(scope_minutes low  "${leaf_deps[@]}")")"
-  leaf_hi="$(napply "$LEAF_APPLY_COUNT" "$(scope_minutes high "${leaf_deps[@]}")")"
-  info "Leaf certs: ${N_LEAF} across ${#leaf_deps[@]} deployment(s), ${LEAF_SCOPE_VMS} VMs"
+if [[ $N_LEAF -gt 0 && ${#leaf_keys[@]} -gt 0 ]]; then
+  leaf_lo="$(napply "$LEAF_APPLY_COUNT" "$(scope_minutes_keys low  "${leaf_keys[@]}")")"
+  leaf_hi="$(napply "$LEAF_APPLY_COUNT" "$(scope_minutes_keys high "${leaf_keys[@]}")")"
+  info "Leaf certs: ${N_LEAF} across ${#leaf_deps[@]} deployment(s), ${#leaf_keys[@]} instance group(s), ${LEAF_SCOPE_VMS} VMs (IG-scoped)"
   info "  ${LEAF_APPLY_COUNT}x Apply Changes => $(fmt_min "$leaf_lo") – $(fmt_min "$leaf_hi")"
 fi
 
@@ -708,19 +787,32 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf '\n'
 
     printf '## Foundation inventory\n\n'
-    # Per-deployment rotation time = (foundation-wide applies that recreate it) x
-    # one-apply cost over its VMs. Falls back to the leaf apply if there are no CAs.
-    if [[ ${imm_fnd:-0} -gt 0 ]]; then dep_applies=$imm_fnd
-    elif [[ $N_LEAF -gt 0 ]]; then dep_applies=$LEAF_APPLY_COUNT; else dep_applies=0; fi
-    printf '| Deployment | Type | VMs | Est. cert-rotation time |\n|---|---|---:|---|\n'
+    # Per-deployment rotation time:
+    #   * with a foundation-wide CA apply (imm_fnd>0): every VM is recreated, so
+    #     cost = imm_fnd x one whole-deployment apply.
+    #   * leaf-only (no CA): cost just the instance group(s) holding this
+    #     deployment's expiring certs; "—" if it has none to rotate.
+    # Raw HTML table with a colgroup so the deployment name keeps most of the width
+    # and the VM count stays narrow (slack would otherwise spread across columns).
+    printf '<table>\n<colgroup><col style="width:72%%"><col style="width:8%%"><col style="width:20%%"></colgroup>\n'
+    printf '<thead><tr><th>Deployment</th><th style="text-align:right">VMs</th><th>Est. cert-rotation time</th></tr></thead>\n<tbody>\n'
     for dep in "${DEPS[@]}"; do
-      if [[ $dep_applies -gt 0 ]]; then
-        dlo="$(napply "$dep_applies" "$(scope_minutes low  "$dep")")"
-        dhi="$(napply "$dep_applies" "$(scope_minutes high "$dep")")"
+      if [[ ${imm_fnd:-0} -gt 0 ]]; then
+        dlo="$(napply "$imm_fnd" "$(scope_minutes low  "$dep")")"
+        dhi="$(napply "$imm_fnd" "$(scope_minutes high "$dep")")"
         dtime="$(fmt_min "$dlo") – $(fmt_min "$dhi")"
-      else dtime="—"; fi
-      printf '| `%s` | %s | %d | %s |\n' "$(md_esc "$dep")" "${PROD_TYPE[$dep]:-?}" "${VM_BY_DEP[$dep]:-0}" "$dtime"
+      else
+        depkeys=(); for key in "${!LEAF_PAIR[@]}"; do [[ "$key" == "${dep}${SEP}"* ]] && depkeys+=("$key"); done
+        if [[ $N_LEAF -gt 0 && ${#depkeys[@]} -gt 0 ]]; then
+          dlo="$(napply "$LEAF_APPLY_COUNT" "$(scope_minutes_keys low  "${depkeys[@]}")")"
+          dhi="$(napply "$LEAF_APPLY_COUNT" "$(scope_minutes_keys high "${depkeys[@]}")")"
+          dtime="$(fmt_min "$dlo") – $(fmt_min "$dhi")"
+        else dtime="—"; fi
+      fi
+      printf '<tr><td><code>%s</code></td><td style="text-align:right">%d</td><td style="white-space:nowrap">%s</td></tr>\n' \
+        "$dep" "${VM_BY_DEP[$dep]:-0}" "$dtime"
     done
+    printf '</tbody>\n</table>\n'
     [[ ${N_PARALLEL_IG:-0} -gt 0 ]] && printf '\n> %d instance group(s) have `serial:false` — they may update in parallel, so real time can come in under the (conservative serial) estimate.\n' "$N_PARALLEL_IG"
     printf '\n'
 
@@ -763,8 +855,8 @@ if [[ $MD_MODE -eq 1 ]]; then
       if [[ "${leaf_absorbed:-0}" -eq 1 ]]; then
         printf '| Leaf certs | folded into the shared apply #2 | included |\n'
       else
-        printf '| Leaf certs | %d× over %d deployment(s) | %s – %s |\n' \
-          "$LEAF_APPLY_COUNT" "${#LEAF_BY_DEP[@]}" "$(fmt_min "$leaf_lo")" "$(fmt_min "$leaf_hi")"
+        printf '| Leaf certs | %d× over %d instance group(s) in %d deployment(s) | %s – %s |\n' \
+          "$LEAF_APPLY_COUNT" "${#leaf_keys[@]}" "${#leaf_deps[@]}" "$(fmt_min "$leaf_lo")" "$(fmt_min "$leaf_hi")"
       fi
     fi
     if [[ ${#CA_MODEL[@]} -gt 0 ]]; then
