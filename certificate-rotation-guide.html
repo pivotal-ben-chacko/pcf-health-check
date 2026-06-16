@@ -275,11 +275,11 @@ only touches the instance groups whose certificate content actually
 changed.</p>
 <pre><code>time for ONE Apply Changes over an instance group
     = 20 min  (fixed overhead: staging, compile, manifest, migrations)
-    + (serial recreate waves) × (4–10 min per VM)
+    + (serial recreate waves) × (4–6 min per VM)
 
 serial recreate waves = canaries + ceil((VMs − canaries) / max_in_flight)</code></pre>
 <ul>
-<li><strong>4 min/VM</strong> is the optimistic (low) figure, <strong>10
+<li><strong>4 min/VM</strong> is the optimistic (low) figure, <strong>6
 min/VM</strong> the conservative (high).</li>
 <li><code>canaries</code> and <code>max_in_flight</code> come from each
 instance group’s BOSH manifest <code>update</code> block. For
@@ -301,8 +301,8 @@ fleet is the <em>only</em> source of parallelism anywhere on the
 foundation. The cells aren’t touched by a leaf rotation, but a
 foundation-wide / CA rotation recreates <em>every</em> VM — so the
 cells’ 5-at-a-time roll is what keeps a whole-foundation apply from
-being a fully serial slog (CHD’s foundation-wide apply ≈ 21h 44m – 53h
-50m for 514 VMs, well under the ~34h–86h a fully serial roll would
+being a fully serial slog (CHD’s foundation-wide apply ≈ 21h 44m – 32h
+26m for 514 VMs, well under the ~34h–52h a fully serial roll would
 take).</p>
 </blockquote>
 <blockquote>
@@ -461,8 +461,8 @@ from Digicert).</li>
 <li><strong>Rotation:</strong> <strong>Leaf — 1 Apply Changes</strong>
 over the router instance group(s).</li>
 <li><strong>Time (CHD example):</strong> <code>router</code> 6 +
-<code>tcp_router</code> 6 = 12 VMs → <code>20 + 12 × (4–10)</code> =
-<strong>≈ 1h 08m – 2h 20m</strong>.</li>
+<code>tcp_router</code> 6 = 12 VMs → <code>20 + 12 × (4–6)</code> =
+<strong>≈ 1h 08m – 1h 32m</strong>.</li>
 <li><strong>Note:</strong> because this terminates <em>all</em> ingress,
 the rotation recreates the routers — plan it as a rolling event (no full
 outage, but each router drains in turn).</li>
@@ -481,7 +481,7 @@ service provider.</li>
 <li><strong>Rotation:</strong> <strong>Leaf — 1 Apply Changes</strong>
 over the <code>uaa</code> group.</li>
 <li><strong>Time (CHD example):</strong> <code>uaa</code> = 3 VMs →
-<code>20 + 3 × (4–10)</code> = <strong>≈ 32m – 50m</strong>.</li>
+<code>20 + 3 × (4–6)</code> = <strong>≈ 32m – 38m</strong>.</li>
 </ul>
 <h3 id="routing-custom-ca-certificates">Routing custom CA
 certificates</h3>
@@ -496,7 +496,7 @@ list, not a foundation-wide trust anchor.</li>
 <li><strong>Rotation:</strong> <strong>Leaf-style — 1 Apply
 Changes</strong> over the <code>router</code> group.</li>
 <li><strong>Time (CHD example):</strong> <code>router</code> = 6 VMs →
-<code>20 + 6 × (4–10)</code> = <strong>≈ 44m – 1h 20m</strong>.</li>
+<code>20 + 6 × (4–6)</code> = <strong>≈ 44m – 56m</strong>.</li>
 </ul>
 <h3 id="grafana-route-tls-certificate">Grafana route TLS
 certificate</h3>
@@ -510,7 +510,7 @@ dashboard’s HTTPS cert).</li>
 <li><strong>Rotation:</strong> <strong>Leaf — 1 Apply Changes</strong>
 over the <code>grafana</code> group.</li>
 <li><strong>Time (CHD example):</strong> <code>grafana</code> = 1 VM →
-<code>20 + 1 × (4–10)</code> = <strong>≈ 24m – 30m</strong>.</li>
+<code>20 + 1 × (4–6)</code> = <strong>≈ 24m – 26m</strong>.</li>
 </ul>
 <h3 id="internal-tas-leaf-certificates-the-large-majority">Internal TAS
 leaf certificates (the large majority)</h3>
@@ -558,7 +558,7 @@ tile).</li>
 <li><strong>Time:</strong> <code>2 × (foundation-wide apply)</code> +
 <code>1 × (all tiles except cf)</code>. On a large foundation this is
 the single most expensive rotation after a root CA. (On OMA: ≈
-<strong>61h – 152h</strong> for the full 3-phase campaign over ~558
+<strong>61h – 91h</strong> for the full 3-phase campaign over ~558
 VMs.)</li>
 </ul>
 <h3 id="diego-instance-identity-ca">Diego instance-identity CA</h3>
@@ -621,8 +621,8 @@ foundation-wide</strong> (see the 3-phase explanation below). This is
 the most expensive rotation on the foundation: each of the 3 applies
 recreates <em>every</em> VM.</li>
 <li><strong>Time:</strong> <code>3 × (foundation-wide apply)</code>. (On
-OMA, one foundation-wide apply ≈ <strong>24h – 60h</strong>, so a root
-CA rotation ≈ <strong>72h – 180h</strong> of Apply-Changes compute,
+OMA, one foundation-wide apply ≈ <strong>24h – 36h</strong>, so a root
+CA rotation ≈ <strong>72h – 108h</strong> of Apply-Changes compute,
 excluding change-window gaps.)</li>
 </ul>
 <h3 id="bosh-trusted-certificates-trust-store">BOSH trusted-certificates
@@ -719,7 +719,7 @@ Each of the 3 applies recreates the VMs in that phase’s scope. For a
 CA) all three phases are foundation-wide — each apply recreates
 <em>every</em> VM — so it is the <strong>most expensive rotation on the
 platform</strong>: <code>3 × one foundation-wide apply</code>, on the
-order of <strong>72h – 180h</strong> of Apply-Changes compute on a large
+order of <strong>72h – 108h</strong> of Apply-Changes compute on a large
 (~558-VM) foundation. That’s compute only; real calendar time is longer
 because of change-window approvals between phases, so a root CA rotation
 is a <strong>multi-day, multi-window event you must plan well ahead of
@@ -883,7 +883,7 @@ Yes (Digicert)
 1
 </td>
 <td style="white-space:nowrap">
-~1h 08m – 2h 20m (12 VMs)
+~1h 08m – 1h 32m (12 VMs)
 </td>
 </tr>
 <tr>
@@ -903,7 +903,7 @@ Yes (Digicert)
 1
 </td>
 <td style="white-space:nowrap">
-~32m – 50m (3 VMs)
+~32m – 38m (3 VMs)
 </td>
 </tr>
 <tr>
@@ -923,7 +923,7 @@ Yes (Digicert)
 1
 </td>
 <td style="white-space:nowrap">
-~44m – 1h 20m (6 VMs)
+~44m – 56m (6 VMs)
 </td>
 </tr>
 <tr>
@@ -943,7 +943,7 @@ Yes (Digicert)
 1
 </td>
 <td style="white-space:nowrap">
-~24m – 30m (1 VM)
+~24m – 26m (1 VM)
 </td>
 </tr>
 <tr>
@@ -1023,7 +1023,7 @@ No
 3
 </td>
 <td style="white-space:nowrap">
-~72h – 180h (whole foundation)
+~72h – 108h (whole foundation)
 </td>
 </tr>
 <tr>
@@ -1043,7 +1043,7 @@ CA (Digicert)
 3
 </td>
 <td style="white-space:nowrap">
-~61h – 152h (whole foundation)
+~61h – 91h (whole foundation)
 </td>
 </tr>
 <tr>
@@ -1063,7 +1063,7 @@ Yes (internal)
 3
 </td>
 <td style="white-space:nowrap">
-~72h – 180h (whole foundation)
+~72h – 108h (whole foundation)
 </td>
 </tr>
 <tr>
@@ -1083,7 +1083,7 @@ No
 3
 </td>
 <td style="white-space:nowrap">
-~72h – 180h (whole foundation)
+~72h – 108h (whole foundation)
 </td>
 </tr>
 <tr>
@@ -1103,7 +1103,7 @@ your org CA
 1
 </td>
 <td style="white-space:nowrap">
-~24h – 60h (whole foundation)
+~24h – 36h (whole foundation)
 </td>
 </tr>
 <tr>
@@ -1129,10 +1129,10 @@ immediate (OM Settings, no Apply Changes)
 </tbody>
 </table>
 <p>The CA-row times come from the rotation model: one foundation-wide
-Apply Changes ≈ <strong>24h – 60h</strong> on a ~558-VM foundation, so a
-Root/DNS CA (3 phases) ≈ 72h–180h, the Services TLS CA (2 phases
-all-tiles + 1 phase all-but-cf) ≈ 61h–152h, and the trusted-store CA
-(single swap apply) ≈ 24h–60h. Leaf-row times are one apply over just
+Apply Changes ≈ <strong>24h – 36h</strong> on a ~558-VM foundation, so a
+Root/DNS CA (3 phases) ≈ 72h–108h, the Services TLS CA (2 phases
+all-tiles + 1 phase all-but-cf) ≈ 61h–91h, and the trusted-store CA
+(single swap apply) ≈ 24h–36h. Leaf-row times are one apply over just
 the listed instance group(s).</p>
 <hr />
 <h2 id="key-takeaways">Key takeaways</h2>

@@ -20,12 +20,12 @@ content actually changed.
 ```
 time for ONE Apply Changes over an instance group
     = 20 min  (fixed overhead: staging, compile, manifest, migrations)
-    + (serial recreate waves) × (4–10 min per VM)
+    + (serial recreate waves) × (4–6 min per VM)
 
 serial recreate waves = canaries + ceil((VMs − canaries) / max_in_flight)
 ```
 
-- **4 min/VM** is the optimistic (low) figure, **10 min/VM** the conservative (high).
+- **4 min/VM** is the optimistic (low) figure, **6 min/VM** the conservative (high).
 - `canaries` and `max_in_flight` come from each instance group's BOSH manifest
   `update` block. For safety-critical groups (routers, uaa, databases) these are
   usually `max_in_flight: 1`, so the group rolls **one VM at a time** — i.e. waves
@@ -40,8 +40,8 @@ serial recreate waves = canaries + ceil((VMs − canaries) / max_in_flight)
 > fleet is the *only* source of parallelism anywhere on the foundation. The cells
 > aren't touched by a leaf rotation, but a foundation-wide / CA rotation recreates
 > *every* VM — so the cells' 5-at-a-time roll is what keeps a whole-foundation apply
-> from being a fully serial slog (CHD's foundation-wide apply ≈ 21h 44m – 53h 50m for
-> 514 VMs, well under the ~34h–86h a fully serial roll would take).
+> from being a fully serial slog (CHD's foundation-wide apply ≈ 21h 44m – 32h 26m for
+> 514 VMs, well under the ~34h–52h a fully serial roll would take).
 
 > The example minute figures below use the CHD foundation's measured instance-group
 > sizes (`router` = 6, `tcp_router` = 6, `uaa` = 3, `grafana` = 1, all rolling
@@ -118,7 +118,7 @@ Two practical consequences:
   `*.sys.<domain>` / `*.apps.<domain>` from Digicert).
 - **Rotation:** **Leaf — 1 Apply Changes** over the router instance group(s).
 - **Time (CHD example):** `router` 6 + `tcp_router` 6 = 12 VMs →
-  `20 + 12 × (4–10)` = **≈ 1h 08m – 2h 20m**.
+  `20 + 12 × (4–6)` = **≈ 1h 08m – 1h 32m**.
 - **Note:** because this terminates *all* ingress, the rotation recreates the
   routers — plan it as a rolling event (no full outage, but each router drains in turn).
 
@@ -128,7 +128,7 @@ Two practical consequences:
   small-footprint install). This is the key UAA uses as a SAML service provider.
 - **Configurable:** **Yes** (operator-supplied).
 - **Rotation:** **Leaf — 1 Apply Changes** over the `uaa` group.
-- **Time (CHD example):** `uaa` = 3 VMs → `20 + 3 × (4–10)` = **≈ 32m – 50m**.
+- **Time (CHD example):** `uaa` = 3 VMs → `20 + 3 × (4–6)` = **≈ 32m – 38m**.
 
 ### Routing custom CA certificates
 - **Property:** `.properties.routing_custom_ca_certificates`
@@ -137,7 +137,7 @@ Two practical consequences:
   list, not a foundation-wide trust anchor.
 - **Configurable:** **Yes.**
 - **Rotation:** **Leaf-style — 1 Apply Changes** over the `router` group.
-- **Time (CHD example):** `router` = 6 VMs → `20 + 6 × (4–10)` = **≈ 44m – 1h 20m**.
+- **Time (CHD example):** `router` = 6 VMs → `20 + 6 × (4–6)` = **≈ 44m – 56m**.
 
 ### Grafana route TLS certificate
 - **Property:** `.properties.grafana_route.manual.ssl_certificates`
@@ -145,7 +145,7 @@ Two practical consequences:
   Grafana dashboard's HTTPS cert).
 - **Configurable:** **Yes.**
 - **Rotation:** **Leaf — 1 Apply Changes** over the `grafana` group.
-- **Time (CHD example):** `grafana` = 1 VM → `20 + 1 × (4–10)` = **≈ 24m – 30m**.
+- **Time (CHD example):** `grafana` = 1 VM → `20 + 1 × (4–6)` = **≈ 24m – 26m**.
 
 ### Internal TAS leaf certificates (the large majority)
 - **Properties:** `.properties.<component>_*` — e.g. `bbs_*`, `cloud_controller_*`,
@@ -174,7 +174,7 @@ Two practical consequences:
   3. **Phase 3 — delete the old CA:** foundation-wide (every tile).
 - **Time:** `2 × (foundation-wide apply)` + `1 × (all tiles except cf)`. On a large
   foundation this is the single most expensive rotation after a root CA. (On OMA:
-  ≈ **61h – 152h** for the full 3-phase campaign over ~558 VMs.)
+  ≈ **61h – 91h** for the full 3-phase campaign over ~558 VMs.)
 
 ### Diego instance-identity CA
 - **Name:** `/cf/diego-instance-identity-root-ca` and its intermediate
@@ -216,7 +216,7 @@ Two practical consequences:
   explanation below). This is the most expensive rotation on the foundation: each of
   the 3 applies recreates *every* VM.
 - **Time:** `3 × (foundation-wide apply)`. (On OMA, one foundation-wide apply ≈
-  **24h – 60h**, so a root CA rotation ≈ **72h – 180h** of Apply-Changes compute,
+  **24h – 36h**, so a root CA rotation ≈ **72h – 108h** of Apply-Changes compute,
   excluding change-window gaps.)
 
 ### BOSH trusted-certificates (trust store)
@@ -290,7 +290,7 @@ cert changes), which is why a CA rotation costs **3×** a leaf rotation's footpr
 recreates the VMs in that phase's scope. For a **root / foundation-wide CA** (root
 CA, BOSH DNS CA, NATS CA) all three phases are foundation-wide — each apply
 recreates *every* VM — so it is the **most expensive rotation on the platform**:
-`3 × one foundation-wide apply`, on the order of **72h – 180h** of Apply-Changes
+`3 × one foundation-wide apply`, on the order of **72h – 108h** of Apply-Changes
 compute on a large (~558-VM) foundation. That's compute only; real calendar time
 is longer because of change-window approvals between phases, so a root CA rotation
 is a **multi-day, multi-window event you must plan well ahead of expiry**. A
@@ -410,26 +410,26 @@ your foundation's VM counts.
 <colgroup><col style="width:19%"><col style="width:21%"><col style="width:13%"><col style="width:11%"><col style="width:8%"><col style="width:28%"></colgroup>
 <thead><tr><th>Certificate</th><th>Used by</th><th>Configurable</th><th>Validity</th><th>Applies</th><th>Rotation time</th></tr></thead>
 <tbody>
-<tr><td>Networking PoE TLS</td><td>gorouter (router, tcp_router)</td><td>Yes (Digicert)</td><td>≤ ~13 mo</td><td style="text-align:right">1</td><td style="white-space:nowrap">~1h 08m – 2h 20m (12 VMs)</td></tr>
-<tr><td>UAA SAML SP key</td><td>uaa (control in SF)</td><td>Yes (Digicert)</td><td>≤ ~13 mo</td><td style="text-align:right">1</td><td style="white-space:nowrap">~32m – 50m (3 VMs)</td></tr>
-<tr><td>Routing custom CA</td><td>gorouter (router)</td><td>Yes (Digicert)</td><td>≤ ~13 mo</td><td style="text-align:right">1</td><td style="white-space:nowrap">~44m – 1h 20m (6 VMs)</td></tr>
-<tr><td>Grafana route TLS</td><td>grafana (Healthwatch)</td><td>Yes (Digicert)</td><td>≤ ~13 mo</td><td style="text-align:right">1</td><td style="white-space:nowrap">~24m – 30m (1 VM)</td></tr>
+<tr><td>Networking PoE TLS</td><td>gorouter (router, tcp_router)</td><td>Yes (Digicert)</td><td>≤ ~13 mo</td><td style="text-align:right">1</td><td style="white-space:nowrap">~1h 08m – 1h 32m (12 VMs)</td></tr>
+<tr><td>UAA SAML SP key</td><td>uaa (control in SF)</td><td>Yes (Digicert)</td><td>≤ ~13 mo</td><td style="text-align:right">1</td><td style="white-space:nowrap">~32m – 38m (3 VMs)</td></tr>
+<tr><td>Routing custom CA</td><td>gorouter (router)</td><td>Yes (Digicert)</td><td>≤ ~13 mo</td><td style="text-align:right">1</td><td style="white-space:nowrap">~44m – 56m (6 VMs)</td></tr>
+<tr><td>Grafana route TLS</td><td>grafana (Healthwatch)</td><td>Yes (Digicert)</td><td>≤ ~13 mo</td><td style="text-align:right">1</td><td style="white-space:nowrap">~24m – 26m (1 VM)</td></tr>
 <tr><td>Internal TAS leaves</td><td>their owning IGs</td><td>No (auto)</td><td>2 yr max</td><td style="text-align:right">1</td><td style="white-space:nowrap">scales with IG size</td></tr>
 <tr><td>Per-service-tile certs</td><td>each service tile's VMs</td><td>mostly No</td><td>2 yr leaf / 4 yr CA</td><td style="text-align:right">1–3</td><td style="white-space:nowrap">scales with tile size</td></tr>
 <tr><td>Diego instance-identity CA</td><td>Diego cells (cf)</td><td>No</td><td>4 yr max</td><td style="text-align:right">3</td><td style="white-space:nowrap">3× the cf deployment</td></tr>
-<tr><td>NATS client CA</td><td>every VM (NATS bus)</td><td>No</td><td>4 yr max</td><td style="text-align:right">3</td><td style="white-space:nowrap">~72h – 180h (whole foundation)</td></tr>
-<tr><td>Services TLS CA</td><td>service instances</td><td>CA (Digicert)</td><td>4 yr max</td><td style="text-align:right">3</td><td style="white-space:nowrap">~61h – 152h (whole foundation)</td></tr>
-<tr><td>Root CA / opsman root CA</td><td>every VM</td><td>Yes (internal)</td><td>4 yr max</td><td style="text-align:right">3</td><td style="white-space:nowrap">~72h – 180h (whole foundation)</td></tr>
-<tr><td>BOSH DNS CA</td><td>every VM (bosh-dns)</td><td>No</td><td>4 yr max</td><td style="text-align:right">3</td><td style="white-space:nowrap">~72h – 180h (whole foundation)</td></tr>
-<tr><td>Trusted-store CA</td><td>every VM (trust store)</td><td>Yes (Digicert)</td><td>your org CA</td><td style="text-align:right">1</td><td style="white-space:nowrap">~24h – 60h (whole foundation)</td></tr>
+<tr><td>NATS client CA</td><td>every VM (NATS bus)</td><td>No</td><td>4 yr max</td><td style="text-align:right">3</td><td style="white-space:nowrap">~72h – 108h (whole foundation)</td></tr>
+<tr><td>Services TLS CA</td><td>service instances</td><td>CA (Digicert)</td><td>4 yr max</td><td style="text-align:right">3</td><td style="white-space:nowrap">~61h – 91h (whole foundation)</td></tr>
+<tr><td>Root CA / opsman root CA</td><td>every VM</td><td>Yes (internal)</td><td>4 yr max</td><td style="text-align:right">3</td><td style="white-space:nowrap">~72h – 108h (whole foundation)</td></tr>
+<tr><td>BOSH DNS CA</td><td>every VM (bosh-dns)</td><td>No</td><td>4 yr max</td><td style="text-align:right">3</td><td style="white-space:nowrap">~72h – 108h (whole foundation)</td></tr>
+<tr><td>Trusted-store CA</td><td>every VM (trust store)</td><td>Yes (Digicert)</td><td>your org CA</td><td style="text-align:right">1</td><td style="white-space:nowrap">~24h – 36h (whole foundation)</td></tr>
 <tr><td>Ops Manager UI SSL</td><td>Ops Manager console</td><td>Yes</td><td>≤ ~13 mo</td><td style="text-align:right">0</td><td style="white-space:nowrap">immediate (OM Settings, no Apply Changes)</td></tr>
 </tbody>
 </table>
 
 The CA-row times come from the rotation model: one foundation-wide Apply Changes
-≈ **24h – 60h** on a ~558-VM foundation, so a Root/DNS CA (3 phases) ≈ 72h–180h,
-the Services TLS CA (2 phases all-tiles + 1 phase all-but-cf) ≈ 61h–152h, and the
-trusted-store CA (single swap apply) ≈ 24h–60h. Leaf-row times are one apply over
+≈ **24h – 36h** on a ~558-VM foundation, so a Root/DNS CA (3 phases) ≈ 72h–108h,
+the Services TLS CA (2 phases all-tiles + 1 phase all-but-cf) ≈ 61h–91h, and the
+trusted-store CA (single swap apply) ≈ 24h–36h. Leaf-row times are one apply over
 just the listed instance group(s).
 
 ---
