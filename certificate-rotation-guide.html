@@ -1,0 +1,1171 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>PCF / TAS Certificate Rotation Guide</title>
+  <style>
+
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+.display.math{display: block; text-align: center; margin: 0.5rem auto;}
+
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+  <style type="text/css">
+body {
+font-family: Arial, sans-serif;
+font-size: 11pt;
+line-height: 1.6;
+color: #1A1A1A;
+background: #FFFFFF;
+max-width: 900px;
+margin: 2rem auto;
+padding: 0 1.5rem;
+}
+
+.brand-header {
+text-align: center;
+margin: 0 0 6px;
+}
+.brand-logo {
+height: 42px;
+width: auto;
+}
+
+h1 {
+font-size: 17pt;
+color: #1A1A1A;
+border-bottom: 3px solid #FF6600;
+padding-bottom: 8px;
+margin-top: 4px;
+margin-bottom: 16px;
+text-align: center;
+}
+h2 {
+font-size: 15pt;
+color: #1A1A1A;
+border-left: 4px solid #FF6600;
+padding-left: 10px;
+margin-top: 28px;
+margin-bottom: 10px;
+}
+h3 {
+font-size: 12pt;
+color: #FF6600;
+margin-top: 18px;
+margin-bottom: 6px;
+}
+h4 {
+font-size: 11pt;
+color: #4A4A4A;
+margin-top: 12px;
+}
+
+p {
+color: #1A1A1A;
+margin-bottom: 10px;
+}
+
+hr {
+border: none;
+border-top: 2px solid #FF6600;
+margin: 22px 0;
+opacity: 0.3;
+}
+
+blockquote {
+border-left: 4px solid #FF6600;
+background-color: #FFF3EB;
+margin: 14px 0;
+padding: 10px 16px;
+border-radius: 0 4px 4px 0;
+color: #1A1A1A;
+font-size: 12pt;
+}
+
+code {
+background-color: #FFF3EB;
+border: 1px solid #FFE0C8;
+border-radius: 3px;
+padding: 1px 5px;
+font-size: 9pt;
+color: #CC5200;
+word-break: break-all;
+}
+
+pre {
+background-color: #F7F7F7;
+border: 1px solid #DDDDDD;
+border-left: 3px solid #FF6600;
+border-radius: 0 4px 4px 0;
+padding: 12px 14px;
+white-space: pre-wrap;
+word-wrap: break-word;
+word-break: break-all;
+font-size: 9pt;
+line-height: 1.45;
+width: 100%;
+box-sizing: border-box;
+margin: 10px 0;
+}
+pre code {
+background: none;
+border: none;
+padding: 0;
+color: #1A1A1A;
+word-break: break-all;
+white-space: pre-wrap;
+}
+
+table {
+width: 100%;
+border-collapse: collapse;
+margin: 16px 0;
+font-size: 10pt;
+}
+thead tr {
+background-color: #C8C8C8;
+color: #1A1A1A;
+}
+th {
+padding: 9px 12px;
+text-align: left;
+font-weight: bold;
+color: #1A1A1A;
+}
+td {
+padding: 8px 12px;
+border: 1px solid #DDDDDD;
+color: #1A1A1A;
+}
+tr:nth-child(even) td {
+background-color: #FFF3EB;
+}
+tr:nth-child(odd) td {
+background-color: #FFFFFF;
+}
+
+td code {
+white-space: nowrap;
+word-break: normal;
+}
+
+a {
+color: #FF6600;
+text-decoration: none;
+}
+
+ul, ol {
+margin: 8px 0 12px 20px;
+color: #1A1A1A;
+}
+li {
+margin-bottom: 4px;
+}
+
+em {
+color: #6B6B6B;
+}
+
+@media print {
+body { margin: 0; max-width: 100%; }
+h2 { page-break-after: avoid; }
+table { page-break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<div class="brand-header">
+<svg class="brand-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 71.68 36" role="img" aria-label="Fiserv"><rect x="67.1" y="31.11" width="4.58" height="4.58" fill="#f60" /><polygon points="57.82 10.73 60.55 31.18 63.27 10.73 67.51 10.73 63.54 35.68 57.5 35.68 53.57 10.73 57.82 10.73" fill="#f60"></polygon><path d="M2.35,10.73H0v3.32H2.35v21.64H6.49V14.04h2.91v-3.32h-2.91V5.66c0-.74,.15-1.31,.51-1.69,.36-.39,.91-.57,1.65-.57h.75V0h-1.5c-1.84,0-3.61,.39-4.45,1.19-.84,.8-1.09,2.04-1.09,3.81v5.72Z" fill="#f60" /><rect x="10.69" y="10.73" width="4.15" height="24.95" fill="#f60" /><path d="M34,24.62h8.65v-7.69c-.01-4.6-2.22-6.49-6.41-6.49s-6.4,1.88-6.4,6.52v12.64c.01,4.22,2.57,6.4,6.4,6.4s6.4-1.8,6.42-6.4v-2h-4.01s0,1.78,0,2.37c0,1.69-.63,2.86-2.33,2.86s-2.32-1.18-2.32-2.86v-5.35Zm0-8.52c0-1.41,.37-2.87,2.31-2.87s2.33,1.44,2.33,2.86v5.16h-4.64v-5.16Z" fill="#f60" /><path d="M24.17,21.5c-3.13-2.75-3.39-3.13-3.39-5.16,0-1.74,.15-2.79,1.71-2.79s1.76,1.04,1.76,2.81v2.3h4v-3.76c-.01-2.95-2.28-4.45-5.85-4.45s-5.8,1.17-5.82,5.89c0,.8,0,.8,0,.49,0,1.48,.01,3.83,3.68,6.98l1.05,.9c2.7,2.28,3,2.55,2.99,5.26,0,1.67-.1,2.94-1.86,2.94s-1.86-1.28-1.86-2.06v-3.19h-4.2v3.29c0,4.05,2.64,5.06,6.06,5.06s6.06-1.01,6.06-6.23v-.43c0-3.64-.67-4.62-4.33-7.84Z" fill="#f60" /><path d="M48.2,13.3v-2.57h-3.78v24.95h4.08V18.29c0-1.34,.44-2.23,1.2-2.75,.72-.5,1.61-.67,2.74-.68v-4.42c-2.16,.04-3.1,.47-4.2,2.76l-.04,.09Z" fill="#f60" /></svg>
+</div>
+<h1 id="pcf-tas-certificate-rotation-guide">PCF / TAS Certificate
+Rotation Guide</h1>
+<p>A reference for what the various certificates on a TAS foundation are
+for, how each one is rotated, and how long the rotation takes. The time
+estimates use the <strong>CHD Prod</strong> foundation as the worked
+example — its measured instance-group sizes (e.g. <code>router</code> =
+6, <code>tcp_router</code> = 6, <code>uaa</code> = 3,
+<code>grafana</code> = 1) feed the per-VM rotation model, and the
+foundation-wide (CA) figures are scaled to its VM count. For another
+foundation, substitute that foundation’s per-instance-group VM counts;
+the calculation is identical.</p>
+<hr />
+<h2 id="the-cost-model-how-every-number-below-is-derived">The cost model
+(how every number below is derived)</h2>
+<p>A certificate is “rotated” by changing it in Ops Manager and running
+<strong>Apply Changes</strong>. The cost of an Apply Changes is
+dominated by how many VMs BOSH has to recreate/restart, because BOSH
+only touches the instance groups whose certificate content actually
+changed.</p>
+<pre><code>time for ONE Apply Changes over an instance group
+    = 20 min  (fixed overhead: staging, compile, manifest, migrations)
+    + (serial recreate waves) × (4–10 min per VM)
+
+serial recreate waves = canaries + ceil((VMs − canaries) / max_in_flight)</code></pre>
+<ul>
+<li><strong>4 min/VM</strong> is the optimistic (low) figure, <strong>10
+min/VM</strong> the conservative (high).</li>
+<li><code>canaries</code> and <code>max_in_flight</code> come from each
+instance group’s BOSH manifest <code>update</code> block. For
+safety-critical groups (routers, uaa, databases) these are usually
+<code>max_in_flight: 1</code>, so the group rolls <strong>one VM at a
+time</strong> — i.e. waves = number of VMs.</li>
+<li>Groups marked <code>serial: false</code> can roll in parallel with
+their peers, so the real wall-clock can come in <strong>under</strong>
+these (deliberately conservative, serial) numbers.</li>
+</ul>
+<blockquote>
+<p><strong>On CHD Prod:</strong> the front-door groups
+(<code>router</code>, <code>tcp_router</code>, <code>uaa</code>,
+<code>grafana</code>) roll <strong>serially</strong>
+(<code>max_in_flight: 1</code>) — so a leaf rotation of those groups is
+one wave per VM. The <strong>Diego cells</strong> (the bulk of the cf
+tile) roll <strong>5 at a time</strong> (<code>max_in_flight: 5</code>).
+Diego cells aren’t touched by a leaf rotation, but a foundation-wide /
+CA rotation recreates <em>every</em> VM — so on those the cell fleet
+parallelizes 5-at-a-time, which is why a whole-foundation apply is
+<strong>not</strong> a fully serial slog (CHD’s foundation-wide apply ≈
+21h 44m – 53h 50m for 514 VMs, well under the ~34h–86h a fully serial
+roll would take).</p>
+</blockquote>
+<blockquote>
+<p>The example minute figures below use the CHD foundation’s measured
+instance-group sizes (<code>router</code> = 6, <code>tcp_router</code> =
+6, <code>uaa</code> = 3, <code>grafana</code> = 1, all rolling
+serially). On a different foundation, substitute that foundation’s
+per-IG VM counts — the <em>shape</em> of the calculation is
+identical.</p>
+</blockquote>
+<hr />
+<h2 id="two-axes-that-decide-everything-leaf-vs-ca-configurable-vs-non-configurable">Two
+axes that decide everything: leaf vs CA, configurable vs
+non-configurable</h2>
+<h3 id="leaf-certificate-vs-ca-certificate">Leaf certificate vs CA
+certificate</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th></th>
+<th><strong>Leaf certificate</strong></th>
+<th><strong>CA certificate</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>What it is</td>
+<td>A server/client TLS cert presented on a connection (e.g. the
+gorouter’s HTTPS cert)</td>
+<td>A signing authority whose signature other parties trust</td>
+</tr>
+<tr>
+<td>Rotation</td>
+<td><strong>1 Apply Changes</strong> — regenerate the cert, recreate
+only the instance group(s) that use it</td>
+<td><strong>3 Apply Changes</strong> (the add → re-sign → remove dance —
+see below)</td>
+</tr>
+<tr>
+<td>Blast radius</td>
+<td>Only the consuming instance group(s)</td>
+<td>Every VM that <em>trusts</em> the CA (often the whole
+foundation)</td>
+</tr>
+<tr>
+<td>Cost driver</td>
+<td>The VMs of the consuming instance group</td>
+<td>The number of foundation-wide applies × every VM</td>
+</tr>
+</tbody>
+</table>
+<h3 id="configurable-vs-non-configurable">Configurable vs
+non-configurable</h3>
+<ul>
+<li><strong>Non-configurable (auto-generated):</strong> TAS/Ops Manager
+generates and signs these itself (from an internal CA). You don’t supply
+anything — when the signing CA rotates, or the leaf expires, the
+platform regenerates them automatically. Most internal mesh certs
+(diego, cloud_controller, nats, loggregator, credhub, …) are
+non-configurable. <strong>Rotation is just an Apply Changes; no external
+action.</strong></li>
+<li><strong>Configurable (operator-supplied):</strong> You provide the
+certificate yourself — typically a public cert bought from a CA such as
+<strong>Digicert</strong> (front-door TLS), or your org’s own CA (trust
+store). The platform cannot regenerate these for you, so rotation is a
+<strong>two-part job</strong>: (1) obtain the new cert from your CA
+<em>out-of-band</em>, then (2) upload it and Apply Changes. The “obtain
+from Digicert” step is not included in any Apply-Changes time estimate —
+it’s lead time you must plan for separately.</li>
+</ul>
+<p>In a report, a configurable cert is flagged <strong>“requires
+Digicert.”</strong></p>
+<hr />
+<h2 id="certificate-lifetimes-how-long-until-it-expires">Certificate
+lifetimes (how long until it expires)</h2>
+<p>The <strong>validity period</strong> (how long a cert is good for) is
+set when the cert is issued and is independent of how long it takes to
+<em>rotate</em>. Use these standard durations — and <strong>do not
+exceed them</strong>:</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Cert kind</th>
+<th>Standard validity (do not exceed)</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>CA certificates</strong> — root CA, services TLS CA, BOSH
+DNS CA, NATS CA, Diego instance-identity CA, intermediates</td>
+<td><strong>4 years</strong></td>
+<td>A CA should be issued for <strong>at most 4 years</strong>.
+Intermediates chain under their root, so keep them at or below the
+root’s remaining life.</td>
+</tr>
+<tr>
+<td><strong>Leaf certificates</strong> — internal auto-generated leaves
+(diego, cloud_controller, nats, loggregator, credhub, …)</td>
+<td><strong>2 years</strong></td>
+<td>A leaf should be issued for <strong>at most 2 years</strong>.</td>
+</tr>
+<tr>
+<td><strong>Operator-supplied / public leaf</strong> — PoE front-door,
+UAA SP key, grafana (the Digicert ones)</td>
+<td><strong>≤ ~13 months (398 days)</strong></td>
+<td>Public CAs cap TLS-cert lifetime per CA/Browser-Forum rules, so
+these are renewed <strong>~annually</strong> — already well under the
+2-year leaf ceiling, and almost always the soonest to expire.</td>
+</tr>
+</tbody>
+</table>
+<p>Two practical consequences:</p>
+<ul>
+<li><strong>The configurable (Digicert) leaf certs expire first and most
+often.</strong> They are your recurring, roughly-annual rotation work,
+and each carries out-of-band lead time (you must buy the renewal before
+you can Apply Changes).</li>
+<li><strong>CAs expire rarely but are the expensive rotations.</strong>
+At a 4-year ceiling you get years of warning, but the rotation itself is
+a multi-day, foundation-wide, 3-phase event — so it must be planned well
+ahead of the expiry date.</li>
+</ul>
+<blockquote>
+<p>Durations are configurable (CredHub / Ops Manager settings); the
+values above are the recommended ceilings — <strong>CAs ≤ 4 years,
+leaves ≤ 2 years</strong>. The authoritative expiry for any cert is what
+the Ops Manager certificates API reports.</p>
+</blockquote>
+<hr />
+<h2 id="certificate-reference">Certificate reference</h2>
+<h3 id="networking-poe-point-of-entry-tls-certificate">Networking PoE
+(Point of Entry) TLS certificate</h3>
+<ul>
+<li><strong>Property:</strong>
+<code>.properties.networking_poe_ssl_certs[…].certificate</code></li>
+<li><strong>Used by:</strong> the <strong>gorouter</strong>
+(<code>router</code>) — this is the front-door HTTPS cert that
+TLS-terminates all app and system traffic entering the foundation. The
+conservative scope also includes <code>tcp_router</code> and
+<code>ha_proxy</code> where present.</li>
+<li><strong>Configurable:</strong> <strong>Yes</strong> —
+operator-supplied (your public wildcard cert, e.g.
+<code>*.sys.&lt;domain&gt;</code> / <code>*.apps.&lt;domain&gt;</code>
+from Digicert).</li>
+<li><strong>Rotation:</strong> <strong>Leaf — 1 Apply Changes</strong>
+over the router instance group(s).</li>
+<li><strong>Time (CHD example):</strong> <code>router</code> 6 +
+<code>tcp_router</code> 6 = 12 VMs → <code>20 + 12 × (4–10)</code> =
+<strong>≈ 1h 08m – 2h 20m</strong>.</li>
+<li><strong>Note:</strong> because this terminates <em>all</em> ingress,
+the rotation recreates the routers — plan it as a rolling event (no full
+outage, but each router drains in turn).</li>
+</ul>
+<h3 id="uaa-saml-service-provider-key-credentials">UAA SAML Service
+Provider key / credentials</h3>
+<ul>
+<li><strong>Property:</strong>
+<code>.uaa.service_provider_key_credentials</code></li>
+<li><strong>Used by:</strong> the <strong><code>uaa</code></strong>
+instance group (it is colocated on <strong><code>control</code></strong>
+in a small-footprint install). This is the key UAA uses as a SAML
+service provider.</li>
+<li><strong>Configurable:</strong> <strong>Yes</strong>
+(operator-supplied).</li>
+<li><strong>Rotation:</strong> <strong>Leaf — 1 Apply Changes</strong>
+over the <code>uaa</code> group.</li>
+<li><strong>Time (CHD example):</strong> <code>uaa</code> = 3 VMs →
+<code>20 + 3 × (4–10)</code> = <strong>≈ 32m – 50m</strong>.</li>
+</ul>
+<h3 id="routing-custom-ca-certificates">Routing custom CA
+certificates</h3>
+<ul>
+<li><strong>Property:</strong>
+<code>.properties.routing_custom_ca_certificates</code></li>
+<li><strong>Used by:</strong> the <strong>gorouter</strong>
+(<code>router</code>) — the CA list the router trusts when talking to
+custom/backends. Despite the name it behaves as a router-scoped trust
+list, not a foundation-wide trust anchor.</li>
+<li><strong>Configurable:</strong> <strong>Yes.</strong></li>
+<li><strong>Rotation:</strong> <strong>Leaf-style — 1 Apply
+Changes</strong> over the <code>router</code> group.</li>
+<li><strong>Time (CHD example):</strong> <code>router</code> = 6 VMs →
+<code>20 + 6 × (4–10)</code> = <strong>≈ 44m – 1h 20m</strong>.</li>
+</ul>
+<h3 id="grafana-route-tls-certificate">Grafana route TLS
+certificate</h3>
+<ul>
+<li><strong>Property:</strong>
+<code>.properties.grafana_route.manual.ssl_certificates</code></li>
+<li><strong>Used by:</strong> the <strong><code>grafana</code></strong>
+instance group in the <strong>Healthwatch</strong> tile (the Grafana
+dashboard’s HTTPS cert).</li>
+<li><strong>Configurable:</strong> <strong>Yes.</strong></li>
+<li><strong>Rotation:</strong> <strong>Leaf — 1 Apply Changes</strong>
+over the <code>grafana</code> group.</li>
+<li><strong>Time (CHD example):</strong> <code>grafana</code> = 1 VM →
+<code>20 + 1 × (4–10)</code> = <strong>≈ 24m – 30m</strong>.</li>
+</ul>
+<h3 id="internal-tas-leaf-certificates-the-large-majority">Internal TAS
+leaf certificates (the large majority)</h3>
+<ul>
+<li><strong>Properties:</strong>
+<code>.properties.&lt;component&gt;_*</code> — e.g. <code>bbs_*</code>,
+<code>cloud_controller_*</code>, <code>diego_*</code>,
+<code>nats_*</code>, <code>loggregator_*</code>,
+<code>credhub_tls</code>, <code>log_cache_*</code>, etc. (often
+<strong>100+</strong> on a full foundation).</li>
+<li><strong>Used by:</strong> their owning instance group(s) within the
+<code>cf</code> deployment.</li>
+<li><strong>Configurable:</strong> <strong>No</strong> — auto-generated
+and signed by internal TAS CAs.</li>
+<li><strong>Rotation:</strong> <strong>Leaf — 1 Apply Changes</strong>,
+scoped to the consuming instance group(s). Because there are many and
+they’re spread across the cf tile, rotating them together typically
+recreates much of the cf deployment.</li>
+<li><strong>Time:</strong> scales with the affected instance groups’ VM
+counts (same formula).</li>
+</ul>
+<h3 id="services-tls-ca">Services TLS CA</h3>
+<ul>
+<li><strong>Property / name:</strong> <code>/services/tls_ca</code> (the
+“Services TLS CA Procedure”).</li>
+<li><strong>Used by:</strong> the <strong>on-demand service
+instances</strong> (RabbitMQ, Redis, MySQL, Spring Cloud Services, the
+<code>service-instance_*</code> deployments, …) and internal service
+TLS. It signs the leaf certs those services present. <strong>The
+<code>cf</code> tile itself does not use any leaf certs signed by this
+CA.</strong></li>
+<li><strong>Configurable:</strong> It is a CA (operator-relevant) and is
+flagged requires-Digicert when supplied externally.</li>
+<li><strong>Rotation:</strong> <strong>CA — 3 Apply Changes</strong>,
+but with a special phase-2 scope:
+<ol type="1">
+<li><strong>Phase 1 — propagate the new CA:</strong> foundation-wide
+(every tile) so all components trust both old and new CA.</li>
+<li><strong>Phase 2 — regenerate its leaf certs:</strong> <strong>every
+tile EXCEPT <code>cf</code></strong> (cf uses none of this CA’s
+leaves).</li>
+<li><strong>Phase 3 — delete the old CA:</strong> foundation-wide (every
+tile).</li>
+</ol></li>
+<li><strong>Time:</strong> <code>2 × (foundation-wide apply)</code> +
+<code>1 × (all tiles except cf)</code>. On a large foundation this is
+the single most expensive rotation after a root CA. (On OMA: ≈
+<strong>61h – 152h</strong> for the full 3-phase campaign over ~558
+VMs.)</li>
+</ul>
+<h3 id="diego-instance-identity-ca">Diego instance-identity CA</h3>
+<ul>
+<li><strong>Name:</strong>
+<code>/cf/diego-instance-identity-root-ca</code> and its intermediate
+<code>/p-bosh/…/diego-instance-identity-intermediate-ca</code>.</li>
+<li><strong>Used by:</strong> the <strong>Diego cells</strong> — this CA
+issues the short-lived <strong>per-app-container identity
+certificates</strong> (app instance identity and container-to-container
+mTLS). The leaf identity certs are issued <em>dynamically</em> by each
+cell and are very short-lived, so they regenerate automatically as
+containers cycle — you never rotate those by hand.</li>
+<li><strong>Configurable:</strong> <strong>No</strong> (internally
+generated).</li>
+<li><strong>Rotation:</strong> <strong>CA — 3 Apply Changes, scoped to
+the <code>cf</code> deployment only</strong> (the canonical
+<em>deployment-scoped</em> CA). Rotating the CA re-establishes the chain
+the cells use to mint container certs; the dynamic leaf certs follow
+automatically.</li>
+<li><strong>Time:</strong>
+<code>3 × (one apply over the cf deployment)</code>.</li>
+<li><strong>Standard validity:</strong> it is a CA — issue for
+<strong>at most 4 years</strong>; keep the intermediate at or below the
+root.</li>
+</ul>
+<h3 id="nats-client-ca">NATS client CA</h3>
+<ul>
+<li><strong>Property:</strong> <code>.properties.nats_client_ca</code>
+(with leaves <code>nats_client_cert</code>,
+<code>nats_tls_*</code>).</li>
+<li><strong>Used by:</strong> the <strong>NATS message bus</strong> mTLS
+— components such as the gorouter and route-emitter authenticate to NATS
+with certs signed by this CA. Foundation- internal
+(component-to-component), not operator-facing.</li>
+<li><strong>Configurable:</strong> <strong>No</strong> (internally
+generated).</li>
+<li><strong>Rotation:</strong> <strong>CA — 3 Apply Changes,
+foundation-wide</strong> (a foundation trust anchor for the
+control-plane message bus).</li>
+<li><strong>Time:</strong>
+<code>3 × (foundation-wide apply)</code>.</li>
+<li><strong>Standard validity:</strong> it is a CA — issue for
+<strong>at most 4 years</strong>.</li>
+</ul>
+<h3 id="root-ca-ops-manager-root-ca">Root CA / Ops Manager Root CA</h3>
+<ul>
+<li><strong>Name:</strong> <code>.properties.root_ca</code>,
+<code>opsman-root-ca:…</code>, and similar foundation trust
+anchors.</li>
+<li><strong>Used by:</strong> <strong>every VM</strong> — it is the
+trust anchor underneath the platform’s internal PKI. Effectively
+everything chains back to it.</li>
+<li><strong>Configurable:</strong> <strong>Yes</strong> (you
+<em>can</em> supply your own root CA), but it is normally
+<strong>internally generated</strong>, so a configurable-but-internal
+root CA is <strong>not</strong> flagged requires-Digicert.</li>
+<li><strong>Rotation:</strong> <strong>CA — 3 Apply Changes, all
+foundation-wide</strong> (see the 3-phase explanation below). This is
+the most expensive rotation on the foundation: each of the 3 applies
+recreates <em>every</em> VM.</li>
+<li><strong>Time:</strong> <code>3 × (foundation-wide apply)</code>. (On
+OMA, one foundation-wide apply ≈ <strong>24h – 60h</strong>, so a root
+CA rotation ≈ <strong>72h – 180h</strong> of Apply-Changes compute,
+excluding change-window gaps.)</li>
+</ul>
+<h3 id="bosh-trusted-certificates-trust-store">BOSH trusted-certificates
+(trust store)</h3>
+<ul>
+<li><strong>Property:</strong>
+<code>.security_configuration.trusted_certificates[…]</code></li>
+<li><strong>Used by:</strong> <strong>every VM</strong> — Ops Manager
+distributes these CAs into every BOSH-deployed VM’s OS trust store (and
+the director). Typically your org’s CA or an external CA you want
+components to trust for outbound TLS.</li>
+<li><strong>Configurable:</strong> <strong>Yes</strong> — externally
+supplied (requires-Digicert).</li>
+<li><strong>Rotation:</strong> <strong>Single foundation-wide Apply
+Changes</strong> — <em>not</em> the 3-phase dance. The old CA is swapped
+for the new one in one config change, and one Apply Changes propagates
+it to every VM’s trust store. It signs only external-service leaves, so
+there is no platform leaf-regen phase and no separate removal
+apply.</li>
+<li><strong>Time:</strong>
+<code>1 × (foundation-wide apply)</code>.</li>
+</ul>
+<h3 id="ops-manager-ui-ssl-certificate-outside-the-apply-changes-model">Ops
+Manager UI SSL certificate (outside the Apply-Changes model)</h3>
+<ul>
+<li><strong>What:</strong> the TLS cert for the <strong>Ops Manager web
+interface itself</strong> (the operator console), not a cert on the
+deployed foundation.</li>
+<li><strong>Configurable:</strong> <strong>Yes</strong> — you can upload
+your own (or use the self-signed default).</li>
+<li><strong>Rotation:</strong> done in <strong>Ops Manager → Settings →
+SSL Certificate</strong>, <strong>not</strong> via a foundation Apply
+Changes. It does <strong>not</strong> recreate any deployment VMs, so it
+carries none of the cost in this guide — but it’s easy to forget
+precisely because it never shows up in the deployed-products /
+<code>cert-rotation</code> report.</li>
+<li><strong>Time:</strong> effectively immediate (a UI config change +
+Ops Manager reload).</li>
+</ul>
+<h3 id="per-service-tile-certificates">Per-service-tile
+certificates</h3>
+<ul>
+<li><strong>What:</strong> each marketplace <strong>service
+tile</strong> (RabbitMQ, Redis, Tanzu SQL / MySQL, Spring Cloud
+Services, Harbor, Healthwatch, …) ships its <strong>own internal CA and
+leaf certs</strong> for its component VMs — distinct from the Services
+TLS CA, which covers the on-demand service <em>instances</em>.</li>
+<li><strong>Configurable:</strong> mostly <strong>No</strong>
+(tile-managed); some tiles expose an operator- supplied front-end cert
+(e.g. Harbor registry TLS, RabbitMQ management TLS).</li>
+<li><strong>Rotation:</strong> <strong>deployment-scoped</strong> — a
+leaf rotates with 1 Apply Changes over that tile’s instance group(s);
+the tile’s own CA rotates 3-phase on that tile’s deployment. Cost scales
+with that tile’s VM count.</li>
+</ul>
+<h3 id="bosh-dns-certificates-see-the-dedicated-section-below.">BOSH DNS
+certificates — see the dedicated section below.</h3>
+<hr />
+<h2 id="why-a-ca-rotation-takes-3-apply-changes">Why a CA rotation takes
+3 Apply Changes</h2>
+<p>A CA can’t be swapped in a single step without breaking live TLS. If
+you replaced the old CA with the new one at once, there would be a
+window where a component presents a certificate signed by one CA to a
+peer that only trusts the other — the TLS handshake fails and you get an
+outage. The 3-phase procedure exists to keep <strong>both</strong> CAs
+trusted throughout the transition so no live certificate is ever
+untrusted:</p>
+<ol type="1">
+<li><p><strong>Apply 1 — ADD the new CA (generate).</strong> Generate
+the new CA and add it to the trust store <em>alongside</em> the old one.
+Now every component trusts <strong>both</strong> old and new. Nothing is
+signed by the new CA yet, so nothing changes on the wire — this apply
+just distributes trust.</p></li>
+<li><p><strong>Apply 2 — ACTIVATE the new CA and regenerate the leaf
+certificates.</strong> Mark the new CA as the active signer and
+regenerate the leaf certs so they are signed by the <strong>new</strong>
+CA. Components now <em>present</em> new-CA-signed certs. Because
+everyone still trusts both CAs (from Apply 1), every handshake still
+succeeds — zero downtime.</p></li>
+<li><p><strong>Apply 3 — REMOVE the old CA.</strong> Now that no live
+cert is signed by the old CA, remove it from the trust store. Only the
+new CA remains trusted. The rotation is complete.</p></li>
+</ol>
+<p><strong>In short:</strong> you can’t simultaneously (a) trust only
+the new CA and (b) still be presenting old-CA certs. The middle apply is
+what lets you cross that gap without an outage — add-new-trust →
+switch-leaves → drop-old-trust. Each phase is a full Apply Changes (BOSH
+must redeploy the affected VMs to pick up the trust-store and cert
+changes), which is why a CA rotation costs <strong>3×</strong> a leaf
+rotation’s footprint.</p>
+<blockquote>
+<p><strong>Deferring the removal:</strong> Apply 3 (remove old CA) is
+the only phase that can safely wait — an expired-but-still-trusted CA in
+the store is harmless. Operators often run Apply 3 in a later
+maintenance window, as a follow-up to the rest of the rotation.</p>
+</blockquote>
+<hr />
+<h2 id="root-ca-rotation-in-detail">Root CA rotation in detail</h2>
+<p>A root CA is the trust anchor for the entire platform PKI, so
+<strong>all three phases are foundation-wide</strong> — each apply
+recreates <em>every</em> VM:</p>
+<ol type="1">
+<li><strong>Apply 1:</strong> generate the new root CA, add it to every
+VM’s trust (whole foundation).</li>
+<li><strong>Apply 2:</strong> regenerate every intermediate/leaf cert
+that chains to it and activate them (whole foundation).</li>
+<li><strong>Apply 3:</strong> remove the old root CA from every VM
+(whole foundation).</li>
+</ol>
+<p><strong>Time = 3 × one foundation-wide Apply Changes.</strong> A
+foundation-wide apply is
+<code>20 min + (every VM, rolled per its instance group&#39;s update policy) × 4–10 min</code>.
+On a ~558-VM foundation that is roughly <strong>24h – 60h per
+apply</strong>, so a full root CA rotation is on the order of
+<strong>72h – 180h</strong> of Apply-Changes compute — and that’s
+<em>compute only</em>; real calendar time is longer because of
+change-window approvals between phases.</p>
+<p>This is why root CA rotations are planned as multi-day, multi-window
+events, and why you want to know well ahead of expiry.</p>
+<hr />
+<h2 id="how-dns-certificates-are-rotated">How DNS certificates are
+rotated</h2>
+<p>BOSH DNS gives every VM a local DNS resolver, secured by its own
+small PKI:</p>
+<ul>
+<li><strong><code>/opsmgr/bosh_dns/tls_ca</code></strong> — the CA for
+BOSH DNS mutual TLS.</li>
+<li><strong>Leaf certs:</strong>
+<code>bosh_dns_health_client_tls</code>,
+<code>bosh_dns_health_server_tls</code>,
+<code>dns_api_client_tls</code>, <code>dns_api_server_tls</code> — the
+client/server certs the bosh-dns-health and dns-api jobs present to each
+other.</li>
+</ul>
+<p><strong>These are non-configurable</strong> (auto-generated) and,
+crucially, <strong>bosh-dns runs on every VM in the foundation</strong>
+(it’s colocated on every instance group, not a tile of its own). So:</p>
+<ul>
+<li><strong>The DNS leaf certs</strong> rotate like any other
+non-configurable leaf — 1 Apply Changes — but because bosh-dns is
+everywhere, their consuming “instance group” is effectively <strong>the
+whole foundation</strong>. There’s no narrow IG to scope to.</li>
+<li><strong>The DNS CA (<code>bosh_dns/tls_ca</code>)</strong> rotates
+as a <strong>foundation-wide 3-phase CA</strong>, exactly like a root
+CA: add new (all VMs) → re-sign the bosh-dns health/api leaves (all VMs)
+→ remove old (all VMs).</li>
+</ul>
+<p><strong>Does it fit the generic bucket?</strong> Mostly yes — the
+<em>mechanism</em> is the standard CA / leaf rotation. What makes DNS
+certs different in practice is <strong>scope</strong>: because bosh-dns
+is colocated on every VM, even the “leaf” rotation touches the entire
+foundation, so a DNS leaf rotation costs about the same as a
+foundation-wide apply rather than a small per-IG apply. Treat a DNS
+<strong>CA</strong> rotation like a root CA (3 × foundation-wide), and a
+DNS <strong>leaf</strong> rotation like one foundation-wide apply.</p>
+<h3 id="recommended-automatic-rotation-via-director-config">Recommended:
+automatic rotation via Director Config</h3>
+<p>The simplest way to keep the BOSH DNS CA and its leaf certs current
+is to let the platform rotate them for you. In <strong>Ops Manager →
+BOSH Director tile → Director Config</strong>, enable <strong>“Enable
+automatic rotation of the BOSH DNS CA certificate.”</strong></p>
+<p>With this turned on, the BOSH DNS CA/leaf certificates are rotated
+automatically, and the rotated certificates are <strong>deployed to VMs
+during an Apply Changes when new stemcells are also being deployed to
+those VMs</strong>. In other words it piggybacks on the stemcell/VM
+recreation you’re already doing — there’s no separate, dedicated
+DNS-cert rotation campaign to run. <strong>Refer to the product
+documentation for details.</strong></p>
+<p>This is the proactive, low-effort path and should be the default. The
+manual procedure below is only for rotating out-of-band, and the
+<code>--skip-drain</code> recovery further down is only for the reactive
+case where the CA has already expired.</p>
+<h3 id="manual-rotation-out-of-band-credhub-maestro-transitional-signing">Manual
+rotation (out-of-band): CredHub <code>maestro</code> transitional
+signing</h3>
+<p>If you need to rotate the DNS CA manually, the 3-phase “add new →
+re-sign → remove old” dance is carried out with the CredHub
+<code>maestro</code> CLI plus Apply Changes. The transitional-signing
+feature is how CredHub keeps <strong>both</strong> the old and new CA
+trusted during the cross-over (the same zero-downtime principle as any
+CA rotation):</p>
+<p><strong>Phase 1 — regenerate the CA and transition, then re-sign the
+leaves:</strong></p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">maestro</span> regenerate ca <span class="at">--name</span> <span class="st">&quot;/opsmgr/bosh_dns/tls_ca&quot;</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">maestro</span> update-transitional signing <span class="at">--name</span> <span class="st">&quot;/opsmgr/bosh_dns/tls_ca&quot;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="ex">maestro</span> regenerate leaf <span class="at">--signed-by</span> <span class="st">&quot;/opsmgr/bosh_dns/tls_ca&quot;</span></span></code></pre></div>
+<p><strong>Phase 2 — deploy:</strong> run <strong>Apply Changes</strong>
+in Ops Manager (enable <em>“Upgrade all service instances”</em> so the
+on-demand service tiles pick up the new DNS certs too).</p>
+<p><strong>Phase 3 — clean up:</strong> drop the transitional (old) CA,
+then Apply Changes again:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">maestro</span> update-transitional remove <span class="at">--name</span> <span class="st">&quot;/opsmgr/bosh_dns/tls_ca&quot;</span></span></code></pre></div>
+<p>(again with service-instance upgrades enabled).</p>
+<h3 id="special-case-the-dns-ca-has-already-expired">Special case: the
+DNS CA has ALREADY expired</h3>
+<p>This is the gotcha that makes an <em>expired</em> DNS CA worse than a
+normal rotation. BOSH VM <strong>drain scripts depend on a working BOSH
+DNS</strong> — but if the DNS CA has already expired, DNS is broken, so
+the drains hang and the Apply Changes <strong>deployment fails</strong>.
+To get past it, redeploy the stuck deployment skipping drain:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">bosh</span> <span class="at">-d</span> FAILED_DEPLOYMENT manifest <span class="op">&gt;</span> deployment.yaml</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">bosh</span> <span class="at">-d</span> FAILED_DEPLOYMENT deploy <span class="at">--skip-drain</span> deployment.yaml</span></code></pre></div>
+<p>Repeat per failing deployment until the new certs are on every
+instance, then continue with Phase 3. <strong>Implication:</strong>
+rotate the BOSH DNS CA <em>before</em> it expires — a proactive rotation
+is a clean 3-phase Apply-Changes job; a reactive one (after expiry) adds
+per-deployment <code>--skip-drain</code> recovery on top.</p>
+<blockquote>
+<p>Source: Broadcom KB 424654 — <em>How to rotate expired BOSH DNS CA
+certificates</em>
+(<code>knowledge.broadcom.com/external/article/424654</code>).</p>
+</blockquote>
+<hr />
+<h2 id="quick-reference-individual-rotation-cost">Quick-reference:
+individual rotation cost</h2>
+<p>Each certificate rotated on its own. The <strong>Rotation
+time</strong> is the total Apply-Changes compute for the whole rotation
+(all phases). Leaf rows use the CHD instance-group sizes; CA rows use a
+~558-VM (OMA-scale) foundation — substitute your foundation’s VM
+counts.</p>
+<table>
+<colgroup>
+<col style="width:19%">
+<col style="width:21%">
+<col style="width:13%">
+<col style="width:11%">
+<col style="width:8%">
+<col style="width:28%">
+</colgroup>
+<thead>
+<tr>
+<th>
+Certificate
+</th>
+<th>
+Used by
+</th>
+<th>
+Configurable
+</th>
+<th>
+Validity
+</th>
+<th>
+Applies
+</th>
+<th>
+Rotation time
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+Networking PoE TLS
+</td>
+<td>
+gorouter (router, tcp_router)
+</td>
+<td>
+Yes (Digicert)
+</td>
+<td>
+≤ ~13 mo
+</td>
+<td style="text-align:right">
+1
+</td>
+<td style="white-space:nowrap">
+~1h 08m – 2h 20m (12 VMs)
+</td>
+</tr>
+<tr>
+<td>
+UAA SAML SP key
+</td>
+<td>
+uaa (control in SF)
+</td>
+<td>
+Yes (Digicert)
+</td>
+<td>
+≤ ~13 mo
+</td>
+<td style="text-align:right">
+1
+</td>
+<td style="white-space:nowrap">
+~32m – 50m (3 VMs)
+</td>
+</tr>
+<tr>
+<td>
+Routing custom CA
+</td>
+<td>
+gorouter (router)
+</td>
+<td>
+Yes (Digicert)
+</td>
+<td>
+≤ ~13 mo
+</td>
+<td style="text-align:right">
+1
+</td>
+<td style="white-space:nowrap">
+~44m – 1h 20m (6 VMs)
+</td>
+</tr>
+<tr>
+<td>
+Grafana route TLS
+</td>
+<td>
+grafana (Healthwatch)
+</td>
+<td>
+Yes (Digicert)
+</td>
+<td>
+≤ ~13 mo
+</td>
+<td style="text-align:right">
+1
+</td>
+<td style="white-space:nowrap">
+~24m – 30m (1 VM)
+</td>
+</tr>
+<tr>
+<td>
+Internal TAS leaves
+</td>
+<td>
+their owning IGs
+</td>
+<td>
+No (auto)
+</td>
+<td>
+2 yr max
+</td>
+<td style="text-align:right">
+1
+</td>
+<td style="white-space:nowrap">
+scales with IG size
+</td>
+</tr>
+<tr>
+<td>
+Per-service-tile certs
+</td>
+<td>
+each service tile’s VMs
+</td>
+<td>
+mostly No
+</td>
+<td>
+2 yr leaf / 4 yr CA
+</td>
+<td style="text-align:right">
+1–3
+</td>
+<td style="white-space:nowrap">
+scales with tile size
+</td>
+</tr>
+<tr>
+<td>
+Diego instance-identity CA
+</td>
+<td>
+Diego cells (cf)
+</td>
+<td>
+No
+</td>
+<td>
+4 yr max
+</td>
+<td style="text-align:right">
+3
+</td>
+<td style="white-space:nowrap">
+3× the cf deployment
+</td>
+</tr>
+<tr>
+<td>
+NATS client CA
+</td>
+<td>
+every VM (NATS bus)
+</td>
+<td>
+No
+</td>
+<td>
+4 yr max
+</td>
+<td style="text-align:right">
+3
+</td>
+<td style="white-space:nowrap">
+~72h – 180h (whole foundation)
+</td>
+</tr>
+<tr>
+<td>
+Services TLS CA
+</td>
+<td>
+service instances
+</td>
+<td>
+CA (Digicert)
+</td>
+<td>
+4 yr max
+</td>
+<td style="text-align:right">
+3
+</td>
+<td style="white-space:nowrap">
+~61h – 152h (whole foundation)
+</td>
+</tr>
+<tr>
+<td>
+Root CA / opsman root CA
+</td>
+<td>
+every VM
+</td>
+<td>
+Yes (internal)
+</td>
+<td>
+4 yr max
+</td>
+<td style="text-align:right">
+3
+</td>
+<td style="white-space:nowrap">
+~72h – 180h (whole foundation)
+</td>
+</tr>
+<tr>
+<td>
+BOSH DNS CA
+</td>
+<td>
+every VM (bosh-dns)
+</td>
+<td>
+No
+</td>
+<td>
+4 yr max
+</td>
+<td style="text-align:right">
+3
+</td>
+<td style="white-space:nowrap">
+~72h – 180h (whole foundation)
+</td>
+</tr>
+<tr>
+<td>
+Trusted-store CA
+</td>
+<td>
+every VM (trust store)
+</td>
+<td>
+Yes (Digicert)
+</td>
+<td>
+your org CA
+</td>
+<td style="text-align:right">
+1
+</td>
+<td style="white-space:nowrap">
+~24h – 60h (whole foundation)
+</td>
+</tr>
+<tr>
+<td>
+Ops Manager UI SSL
+</td>
+<td>
+Ops Manager console
+</td>
+<td>
+Yes
+</td>
+<td>
+≤ ~13 mo
+</td>
+<td style="text-align:right">
+0
+</td>
+<td style="white-space:nowrap">
+immediate (OM Settings, no Apply Changes)
+</td>
+</tr>
+</tbody>
+</table>
+<p>The CA-row times come from the rotation model: one foundation-wide
+Apply Changes ≈ <strong>24h – 60h</strong> on a ~558-VM foundation, so a
+Root/DNS CA (3 phases) ≈ 72h–180h, the Services TLS CA (2 phases
+all-tiles + 1 phase all-but-cf) ≈ 61h–152h, and the trusted-store CA
+(single swap apply) ≈ 24h–60h. Leaf-row times are one apply over just
+the listed instance group(s).</p>
+<hr />
+<h2 id="key-takeaways">Key takeaways</h2>
+<ul>
+<li><strong>Leaf rotation = 1 apply, scoped to the consuming instance
+group.</strong> Cheap and fast — minutes to a couple of hours —
+<em>if</em> the cert is used by a small group (router, uaa, grafana). It
+only gets expensive when the consuming group is large or when the cert
+is everywhere (DNS).</li>
+<li><strong>CA rotation = 3 applies</strong> because you must
+add-new-trust → re-sign-leaves → drop-old-trust to avoid a TLS outage.
+The last apply can be deferred.</li>
+<li><strong>Foundation-wide CAs (root CA, BOSH DNS CA) are the expensive
+ones</strong> — every phase recreates every VM.</li>
+<li><strong>The services TLS CA is the special case:</strong> 2
+foundation-wide phases + 1 phase over every tile <em>except</em>
+cf.</li>
+<li><strong>The BOSH trusted-store CA is the cheap CA:</strong> a single
+foundation-wide swap apply.</li>
+<li><strong>Configurable certs add out-of-band lead time</strong> — you
+must obtain the new cert from your external CA (Digicert) before any
+Apply Changes; that time is <em>not</em> in the compute estimate.</li>
+<li><strong>All estimates are Apply-Changes compute time only</strong> —
+they exclude the change-window / approval gaps between phases, which
+often dominate the real calendar time for CA rotations.</li>
+</ul>
+</body>
+</html>
