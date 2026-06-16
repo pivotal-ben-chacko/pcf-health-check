@@ -291,18 +291,19 @@ their peers, so the real wall-clock can come in <strong>under</strong>
 these (deliberately conservative, serial) numbers.</li>
 </ul>
 <blockquote>
-<p><strong>On CHD Prod:</strong> the front-door groups
-(<code>router</code>, <code>tcp_router</code>, <code>uaa</code>,
-<code>grafana</code>) roll <strong>serially</strong>
-(<code>max_in_flight: 1</code>) — so a leaf rotation of those groups is
-one wave per VM. The <strong>Diego cells</strong> (the bulk of the cf
-tile) roll <strong>5 at a time</strong> (<code>max_in_flight: 5</code>).
-Diego cells aren’t touched by a leaf rotation, but a foundation-wide /
-CA rotation recreates <em>every</em> VM — so on those the cell fleet
-parallelizes 5-at-a-time, which is why a whole-foundation apply is
-<strong>not</strong> a fully serial slog (CHD’s foundation-wide apply ≈
-21h 44m – 53h 50m for 514 VMs, well under the ~34h–86h a fully serial
-roll would take).</p>
+<p><strong>On CHD Prod:</strong> the <strong>Diego cells are the only
+instance group with <code>max_in_flight: 5</code></strong> (they roll 5
+VMs at a time); <strong>every other instance group rolls
+serially</strong> (<code>max_in_flight: 1</code>, one VM at a time). So
+a leaf rotation of the front-door groups (<code>router</code>,
+<code>uaa</code>, <code>grafana</code>) is one wave per VM, and the cell
+fleet is the <em>only</em> source of parallelism anywhere on the
+foundation. The cells aren’t touched by a leaf rotation, but a
+foundation-wide / CA rotation recreates <em>every</em> VM — so the
+cells’ 5-at-a-time roll is what keeps a whole-foundation apply from
+being a fully serial slog (CHD’s foundation-wide apply ≈ 21h 44m – 53h
+50m for 514 VMs, well under the ~34h–86h a fully serial roll would
+take).</p>
 </blockquote>
 <blockquote>
 <p>The example minute figures below use the CHD foundation’s measured
