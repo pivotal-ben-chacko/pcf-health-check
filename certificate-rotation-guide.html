@@ -739,6 +739,15 @@ from <code>3 × foundation-wide</code> (~72h – 108h) to <code>2 ×</code>
 the follow-up window. (It doesn’t reduce the <em>total</em> compute —
 still three applies — but it shrinks the change window you have to fit
 into a single maintenance slot.)</p>
+<p><strong>Even better — fold it into an apply you’re already
+doing.</strong> The old-CA removal is just a config change that BOSH
+picks up on the <em>next</em> Apply Changes. So if you have a
+foundation-wide Apply Changes coming up anyway — a stemcell update, a
+tile upgrade, or any other change that recreates every VM — let the
+removal ride along with it. The old CA drops out of the trust store as
+part of that deploy, so it costs <strong>no extra apply at all</strong>:
+the deferred ~24h – 36h disappears into work you were going to run
+regardless.</p>
 </blockquote>
 <hr />
 <h2 id="how-dns-certificates-are-rotated">How DNS certificates are

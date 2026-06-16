@@ -306,6 +306,14 @@ those entries in the reference.
 > (~72h – 108h) to `2 ×` (~48h – 72h), with the remaining **~24h – 36h deferred** to
 > the follow-up window. (It doesn't reduce the *total* compute — still three applies
 > — but it shrinks the change window you have to fit into a single maintenance slot.)
+>
+> **Even better — fold it into an apply you're already doing.** The old-CA removal
+> is just a config change that BOSH picks up on the *next* Apply Changes. So if you
+> have a foundation-wide Apply Changes coming up anyway — a stemcell update, a tile
+> upgrade, or any other change that recreates every VM — let the removal ride along
+> with it. The old CA drops out of the trust store as part of that deploy, so it
+> costs **no extra apply at all**: the deferred ~24h – 36h disappears into work you
+> were going to run regardless.
 
 ---
 
