@@ -298,10 +298,14 @@ is a **multi-day, multi-window event you must plan well ahead of expiry**. A
 owning deployment, and the **services TLS CA** skips the cf tile on phase 2 — see
 those entries in the reference.
 
-> **Deferring the removal:** Apply 3 (remove old CA) is the only phase that can
-> safely wait — an expired-but-still-trusted CA in the store is harmless. Operators
-> often run Apply 3 in a later maintenance window, as a follow-up to the rest of
-> the rotation.
+> **Deferring the removal (shortens the immediate window):** Apply 3 (remove old
+> CA) is the only phase that can safely wait — an expired-but-still-trusted CA in
+> the store is harmless. Running it in a **later maintenance window** takes one
+> foundation-wide apply *out of the up-front rotation*, so you schedule less in one
+> sitting. For a root CA the immediate work drops from `3 × foundation-wide`
+> (~72h – 108h) to `2 ×` (~48h – 72h), with the remaining **~24h – 36h deferred** to
+> the follow-up window. (It doesn't reduce the *total* compute — still three applies
+> — but it shrinks the change window you have to fit into a single maintenance slot.)
 
 ---
 

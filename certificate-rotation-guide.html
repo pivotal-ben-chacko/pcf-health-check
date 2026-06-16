@@ -728,10 +728,17 @@ instance-identity CA) only recreates its owning deployment, and the
 <strong>services TLS CA</strong> skips the cf tile on phase 2 — see
 those entries in the reference.</p>
 <blockquote>
-<p><strong>Deferring the removal:</strong> Apply 3 (remove old CA) is
-the only phase that can safely wait — an expired-but-still-trusted CA in
-the store is harmless. Operators often run Apply 3 in a later
-maintenance window, as a follow-up to the rest of the rotation.</p>
+<p><strong>Deferring the removal (shortens the immediate
+window):</strong> Apply 3 (remove old CA) is the only phase that can
+safely wait — an expired-but-still-trusted CA in the store is harmless.
+Running it in a <strong>later maintenance window</strong> takes one
+foundation-wide apply <em>out of the up-front rotation</em>, so you
+schedule less in one sitting. For a root CA the immediate work drops
+from <code>3 × foundation-wide</code> (~72h – 108h) to <code>2 ×</code>
+(~48h – 72h), with the remaining <strong>~24h – 36h deferred</strong> to
+the follow-up window. (It doesn’t reduce the <em>total</em> compute —
+still three applies — but it shrinks the change window you have to fit
+into a single maintenance slot.)</p>
 </blockquote>
 <hr />
 <h2 id="how-dns-certificates-are-rotated">How DNS certificates are
