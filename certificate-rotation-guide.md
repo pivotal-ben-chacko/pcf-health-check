@@ -286,32 +286,22 @@ an outage — add-new-trust → switch-leaves → drop-old-trust. Each phase is 
 Apply Changes (BOSH must redeploy the affected VMs to pick up the trust-store and
 cert changes), which is why a CA rotation costs **3×** a leaf rotation's footprint.
 
+**How expensive it gets depends on the CA's reach.** Each of the 3 applies
+recreates the VMs in that phase's scope. For a **root / foundation-wide CA** (root
+CA, BOSH DNS CA, NATS CA) all three phases are foundation-wide — each apply
+recreates *every* VM — so it is the **most expensive rotation on the platform**:
+`3 × one foundation-wide apply`, on the order of **72h – 180h** of Apply-Changes
+compute on a large (~558-VM) foundation. That's compute only; real calendar time
+is longer because of change-window approvals between phases, so a root CA rotation
+is a **multi-day, multi-window event you must plan well ahead of expiry**. A
+**deployment-scoped CA** (e.g. the Diego instance-identity CA) only recreates its
+owning deployment, and the **services TLS CA** skips the cf tile on phase 2 — see
+those entries in the reference.
+
 > **Deferring the removal:** Apply 3 (remove old CA) is the only phase that can
 > safely wait — an expired-but-still-trusted CA in the store is harmless. Operators
 > often run Apply 3 in a later maintenance window, as a follow-up to the rest of
 > the rotation.
-
----
-
-## Root CA rotation in detail
-
-A root CA is the trust anchor for the entire platform PKI, so **all three phases
-are foundation-wide** — each apply recreates *every* VM:
-
-1. **Apply 1:** generate the new root CA, add it to every VM's trust (whole foundation).
-2. **Apply 2:** regenerate every intermediate/leaf cert that chains to it and
-   activate them (whole foundation).
-3. **Apply 3:** remove the old root CA from every VM (whole foundation).
-
-**Time = 3 × one foundation-wide Apply Changes.** A foundation-wide apply is
-`20 min + (every VM, rolled per its instance group's update policy) × 4–10 min`.
-On a ~558-VM foundation that is roughly **24h – 60h per apply**, so a full root CA
-rotation is on the order of **72h – 180h** of Apply-Changes compute — and that's
-*compute only*; real calendar time is longer because of change-window approvals
-between phases.
-
-This is why root CA rotations are planned as multi-day, multi-window events, and
-why you want to know well ahead of expiry.
 
 ---
 

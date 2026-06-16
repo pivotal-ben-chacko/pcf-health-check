@@ -713,35 +713,26 @@ switch-leaves → drop-old-trust. Each phase is a full Apply Changes (BOSH
 must redeploy the affected VMs to pick up the trust-store and cert
 changes), which is why a CA rotation costs <strong>3×</strong> a leaf
 rotation’s footprint.</p>
+<p><strong>How expensive it gets depends on the CA’s reach.</strong>
+Each of the 3 applies recreates the VMs in that phase’s scope. For a
+<strong>root / foundation-wide CA</strong> (root CA, BOSH DNS CA, NATS
+CA) all three phases are foundation-wide — each apply recreates
+<em>every</em> VM — so it is the <strong>most expensive rotation on the
+platform</strong>: <code>3 × one foundation-wide apply</code>, on the
+order of <strong>72h – 180h</strong> of Apply-Changes compute on a large
+(~558-VM) foundation. That’s compute only; real calendar time is longer
+because of change-window approvals between phases, so a root CA rotation
+is a <strong>multi-day, multi-window event you must plan well ahead of
+expiry</strong>. A <strong>deployment-scoped CA</strong> (e.g. the Diego
+instance-identity CA) only recreates its owning deployment, and the
+<strong>services TLS CA</strong> skips the cf tile on phase 2 — see
+those entries in the reference.</p>
 <blockquote>
 <p><strong>Deferring the removal:</strong> Apply 3 (remove old CA) is
 the only phase that can safely wait — an expired-but-still-trusted CA in
 the store is harmless. Operators often run Apply 3 in a later
 maintenance window, as a follow-up to the rest of the rotation.</p>
 </blockquote>
-<hr />
-<h2 id="root-ca-rotation-in-detail">Root CA rotation in detail</h2>
-<p>A root CA is the trust anchor for the entire platform PKI, so
-<strong>all three phases are foundation-wide</strong> — each apply
-recreates <em>every</em> VM:</p>
-<ol type="1">
-<li><strong>Apply 1:</strong> generate the new root CA, add it to every
-VM’s trust (whole foundation).</li>
-<li><strong>Apply 2:</strong> regenerate every intermediate/leaf cert
-that chains to it and activate them (whole foundation).</li>
-<li><strong>Apply 3:</strong> remove the old root CA from every VM
-(whole foundation).</li>
-</ol>
-<p><strong>Time = 3 × one foundation-wide Apply Changes.</strong> A
-foundation-wide apply is
-<code>20 min + (every VM, rolled per its instance group&#39;s update policy) × 4–10 min</code>.
-On a ~558-VM foundation that is roughly <strong>24h – 60h per
-apply</strong>, so a full root CA rotation is on the order of
-<strong>72h – 180h</strong> of Apply-Changes compute — and that’s
-<em>compute only</em>; real calendar time is longer because of
-change-window approvals between phases.</p>
-<p>This is why root CA rotations are planned as multi-day, multi-window
-events, and why you want to know well ahead of expiry.</p>
 <hr />
 <h2 id="how-dns-certificates-are-rotated">How DNS certificates are
 rotated</h2>
