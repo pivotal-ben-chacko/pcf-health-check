@@ -1,40 +1,4 @@
-processors:
-  memory_limiter:
-    check_interval: 1s
-    limit_mib: 4000
-    spike_limit_mib: 800
-  batch:
-    send_batch_size: 8192
-    timeout: 1s
-
-exporters:
-  splunk_hec:
-    token: #######
-    endpoint: https://10.44.18.25:8088
-    source: otel
-    sourcetype: otel
-    index: pivotal
-    timeout: 10s
-    tls:
-      insecure_skip_verify: true
-
-service:
-  pipelines:
-    traces:
-      processors:
-      - memory_limiter
-      - batch
-      exporters:
-      - splunk_hec
-    metrics:
-      processors:
-      - memory_limiter
-      - batch
-      exporters:
-      - splunk_hec
-    logs:
-      processors:
-      - memory_limiter
-      - batch
-      exporters:
-      - splunk_hec
+argv[0]: 'JSON.SET'
+argv[1]: '260616155140|22607100|DAF7|104|U|0402F37A97BA4E8241'
+argv[2]: '$'
+argv[3]: '{"journalTime":"260616155140","recordType":.<lines_redacted>.."apkBinLen":"<EF><BF><BD>\u0000","ha...<lines redacted>
