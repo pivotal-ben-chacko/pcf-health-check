@@ -9,6 +9,8 @@
 #     ./pcf-health-check.sh                 # sources ~/env.sh automatically
 #     ./pcf-health-check.sh --json          # machine-readable summary for CI gates
 #     ./pcf-health-check.sh --no-color      # plain text (logs)
+#     ./pcf-health-check.sh --markdown --progress-file /tmp/hc-progress.log
+#                                           # heartbeat -> file (tail -f from anywhere)
 #
 # What it checks (the goal is to confirm the foundation is healthy BEFORE a
 # standard TAS/PCF upgrade):
@@ -75,6 +77,9 @@ NO_COLOR=0; JSON_MODE=0; MD_MODE=0
 # Set via --foundation <name> / --foundation=<name> or the FOUNDATION_NAME env var
 # (e.g. FOG, NDC, PROD). Defaults to "/ TAS" to preserve the original title.
 FOUNDATION_NAME="${FOUNDATION_NAME:-/ TAS}"
+# Where the progress heartbeat goes: empty = stderr (quiet modes only); a path
+# (env PROGRESS_FILE or --progress-file) = append there instead, in any mode.
+PROGRESS_FILE="${PROGRESS_FILE:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-color) NO_COLOR=1;;
@@ -82,6 +87,8 @@ while [[ $# -gt 0 ]]; do
     --markdown|--md) MD_MODE=1; NO_COLOR=1;;
     --foundation) shift; FOUNDATION_NAME="${1:-$FOUNDATION_NAME}";;
     --foundation=*) FOUNDATION_NAME="${1#*=}";;
+    --progress-file) shift; PROGRESS_FILE="${1:-}";;
+    --progress-file=*) PROGRESS_FILE="${1#*=}";;
   esac
   shift
 done
@@ -92,10 +99,35 @@ else
   R=""; G=""; Y=""; B=""; BOLD=""; RST=""
 fi
 
-# In --json / --markdown mode, send all human output to /dev/null and keep the
-# original stdout on fd 3 for the final document. Every printf/log below stays
-# unchanged; only the structured report reaches the caller.
-if [[ $JSON_MODE -eq 1 || $MD_MODE -eq 1 ]]; then exec 3>&1 1>/dev/null; fi
+# Live-run observability. PROGRESS_FILE (env or --progress-file) names a log file
+# that fills as the run advances: heartbeat lines (section starts + slow SSH steps,
+# stamped with elapsed seconds) and — in --json/--markdown mode — the full
+# human-readable check log, which those modes would otherwise discard. Watching it
+# with 'tail -f' shows every finding the moment it lands; the final document is
+# still rendered only at the end (its summary tables and score need the full run).
+# Without a file, the heartbeat goes to stderr in the quiet modes only. PROGRESS=0
+# disables the heartbeat (a given file still receives the human log).
+if [[ -n "$PROGRESS_FILE" ]] && ! { : > "$PROGRESS_FILE"; } 2>/dev/null; then
+  printf 'WARN: cannot write progress file %s — progress falls back to stderr\n' "$PROGRESS_FILE" >&2
+  PROGRESS_FILE=""
+fi
+
+# In --json / --markdown mode, keep the original stdout on fd 3 for the final
+# document and move the human log off stdout: into the progress file when given,
+# otherwise /dev/null. Every printf/log below stays unchanged.
+if [[ $JSON_MODE -eq 1 || $MD_MODE -eq 1 ]]; then
+  exec 3>&1
+  if [[ -n "$PROGRESS_FILE" ]]; then exec 1>>"$PROGRESS_FILE"; else exec 1>/dev/null; fi
+fi
+
+QUIET_PROGRESS=0
+[[ ( $JSON_MODE -eq 1 || $MD_MODE -eq 1 ) && "${PROGRESS:-1}" != "0" ]] && QUIET_PROGRESS=1
+progress(){
+  [[ "${PROGRESS:-1}" == "0" ]] && return 0
+  local line; printf -v line '[%4ds] %s' "$SECONDS" "$1"
+  if [[ -n "$PROGRESS_FILE" ]]; then printf '%s\n' "$line" >> "$PROGRESS_FILE"
+  elif [[ $QUIET_PROGRESS -eq 1 ]]; then printf '%s\n' "$line" >&2; fi
+}
 
 WARN_COUNT=0; CRIT_COUNT=0; OK_COUNT=0; CUR_SECTION="general"; FINDINGS=""
 # Markdown table buffers (accumulated during the run, rendered at the end).
@@ -103,7 +135,7 @@ MD_VITALS=""; MD_ALLOC=""; MD_CELLS=""; LRP_SUMMARY=""
 badge(){ case "$1" in OK) printf '✅';; WARN) printf '⚠️';; CRIT) printf '❌';; *) printf 'ℹ️';; esac; }
 # Accumulate one finding per OK/WARN/CRIT check for the JSON/Markdown report (TSV rows).
 add_finding(){ FINDINGS+="${1}"$'\t'"${CUR_SECTION}"$'\t'"${2}"$'\n'; }
-section(){ CUR_SECTION="$(sed -E 's/^[0-9.]+ +//' <<<"$1")"; printf '\n%s%s== %s ==%s\n' "$BOLD" "$B" "$1" "$RST"; }
+section(){ CUR_SECTION="$(sed -E 's/^[0-9.]+ +//' <<<"$1")"; printf '\n%s%s== %s ==%s\n' "$BOLD" "$B" "$1" "$RST"; progress "$1 ..."; }
 ok(){    printf '  %s[ OK ]%s %s\n'   "$G" "$RST" "$1"; OK_COUNT=$((OK_COUNT+1)); add_finding OK "$1"; }
 info(){  printf '  %s[INFO]%s %s\n'   "$B" "$RST" "$1"; }
 warn(){  printf '  %s[WARN]%s %s\n'   "$Y" "$RST" "$1"; WARN_COUNT=$((WARN_COUNT+1)); add_finding WARN "$1"; }
@@ -124,9 +156,21 @@ report(){ # level message
 # works for bosh-ssh users on deployment VMs). Echoes the cleaned 'monit summary'
 # output, or nothing if the VM/agent is unreachable. BOSH's `instances --ps` leaves
 # the state blank for e.g. 'not monitored' processes, which monit reports correctly.
-monit_raw(){ # deployment instance
-  timeout 90 bosh -d "$1" ssh "$2" -c 'sudo /var/vcap/bosh/bin/monit summary' 2>/dev/null \
-    | sed -e 's/\r$//' -e 's/^[^|]*stdout | //'
+# Results come back in globals (a $(...) call site would subshell away MONIT_ERR):
+# MONIT_OUT holds the cleaned summary, MONIT_ERR a short diagnostic on failure.
+# Remote stderr arrives multiplexed on stdout as 'stderr |' lines (e.g. a sudo
+# rejection), while bosh CLI connection errors land on its own stderr — both are
+# captured so the caller can say WHY monit was unreachable.
+monit_raw(){ # deployment instance -> MONIT_OUT, MONIT_ERR
+  local ef out; ef="$(mktemp)"; MONIT_ERR=""; MONIT_OUT=""
+  out="$(timeout 90 bosh -d "$1" ssh "$2" -c 'sudo /var/vcap/bosh/bin/monit summary' 2>"$ef" \
+    | sed -e 's/\r$//')"
+  [[ $? -eq 124 ]] && MONIT_ERR="timed out after 90s"
+  [[ -z "$MONIT_ERR" ]] && MONIT_ERR="$( { sed -n 's/^[^|]*stderr | //p' <<<"$out"; \
+      grep -iE 'error|fail|denied|refused|timed out|unreachable' "$ef"; } \
+    | sed '/^$/d' | head -2 | paste -sd'; ' -)"
+  rm -f "$ef"
+  MONIT_OUT="$(sed 's/^[^|]*stdout | //' <<<"$out")"
 }
 
 # "15% (614 MB)" -> 15   ;   "" -> -1 (n/a)
@@ -174,7 +218,7 @@ fi
 locks="$(bosh --json locks 2>/dev/null | jq -r '.Tables[0].Rows | length')"
 if [[ "${locks:-0}" -gt 0 ]]; then
   crit "${locks} active deployment lock(s) — a deploy/operation is in progress; do not upgrade now."
-  bosh --json locks 2>/dev/null | jq -r '.Tables[0].Rows[] | "        - \(.type) \(.resource)"'
+  bosh --json locks 2>/dev/null | jq -r '.Tables[0].Rows[]? | "        - \(.type) \(.resource)"'
 else
   ok "No active deployment locks."
 fi
@@ -187,7 +231,7 @@ else
 fi
 
 # Recently errored tasks are a soft signal worth surfacing.
-err_tasks="$(bosh --json tasks --recent=25 2>/dev/null | jq -r '[.Tables[0].Rows[] | select(.state=="error")] | length')"
+err_tasks="$(bosh --json tasks --recent=25 2>/dev/null | jq -r '[.Tables[0].Rows[]? | select(.state=="error")] | length')"
 [[ "${err_tasks:-0}" -gt 0 ]] && warn "${err_tasks} of the last 25 BOSH tasks ended in 'error' (review with: bosh tasks --recent=25)."
 
 # --- Director VM health -----------------------------------------------------
@@ -208,7 +252,7 @@ else
           echo @@MEM;   free -m | awk "NR==2{print \$2, \$3}"
           echo @@LOAD;  cut -d" " -f1 /proc/loadavg
           echo @@CPU;   nproc
-          echo @@MONIT; sudo -n monit summary 2>/dev/null | grep -E "^(Process|System) "
+          echo @@MONIT; sudo -n /var/vcap/bosh/bin/monit summary 2>/dev/null | grep -E "^(Process|System) "
         ' 2>/dev/null)"
   dvm_sect(){ awk -v m="^@@$1\$" '$0 ~ m {f=1;next} /^@@/{f=0} f' <<<"$dvm"; }
   if [[ -z "$dvm" ]]; then
@@ -249,9 +293,10 @@ fi
 # ===========================================================================
 # Gather deployments
 # ===========================================================================
-mapfile -t DEPLOYMENTS < <(bosh --json deployments 2>/dev/null | jq -r '.Tables[0].Rows[].name')
+mapfile -t DEPLOYMENTS < <(bosh --json deployments 2>/dev/null | jq -r '.Tables[0].Rows[]?.name')
 [[ ${#DEPLOYMENTS[@]} -eq 0 ]] && die "No BOSH deployments found."
 info "Deployments: ${DEPLOYMENTS[*]}"
+progress "inventorying ${#DEPLOYMENTS[@]} deployment(s) (stemcells, errand groups) ..."
 
 # Stemcell(s) actually in use per deployment, from `bosh vms` (the per-VM view is
 # authoritative — it surfaces a mid-rolling-upgrade split that the deployment-level
@@ -260,7 +305,7 @@ info "Deployments: ${DEPLOYMENTS[*]}"
 STEMCELLS_BY_DEP=""
 for d in "${DEPLOYMENTS[@]}"; do
   stms="$(bosh -d "$d" --json vms 2>/dev/null \
-           | jq -r '.Tables[0].Rows[].stemcell' 2>/dev/null \
+           | jq -r '.Tables[0].Rows[]?.stemcell' 2>/dev/null \
            | sed '/^$/d' | sort -u | paste -sd ', ' -)"
   STEMCELLS_BY_DEP+="${d}"$'\t'"${stms:-none}"$'\n'
 done
@@ -273,11 +318,21 @@ declare -A ERRAND_BY_DEP
 _extra_excl="$(tr ', ' '\n\n' <<<"$EXTRA_EXCLUDE_GROUPS" | sed '/^$/d')"
 excl_note=""
 for d in "${DEPLOYMENTS[@]}"; do
+  # Ops Manager renders instance-group keys alphabetically, so "name:" is NOT on
+  # the "- " line (items start "- azs:") and "lifecycle:" sorts before "name:".
+  # Parse per list item: collect both keys at item-top indent, decide at the
+  # item boundary. "- key:" is normalized to "  key:" to also cover the classic
+  # hand-written style where name rides the dash line.
   igs="$(bosh -d "$d" manifest 2>/dev/null | awk '
-      /^instance_groups:/{f=1; next}
-      f && /^[A-Za-z]/{f=0}
-      f && /^- *name:/{n=$3; next}
-      f && /^[[:space:]]+lifecycle:[[:space:]]*errand([[:space:]]|$)/{print n}')"
+      function flush(){ if (lc=="errand" && n!="") print n; n=""; lc="" }
+      /^instance_groups:/ { f=1; next }
+      f && /^[^ ]/ && !/^- / { flush(); f=0 }
+      !f { next }
+      /^- / { flush() }
+      { line=$0; sub(/^- /, "  ", line) }
+      line ~ /^  name:/ { n=line; sub(/^  name:[[:space:]]*/, "", n); gsub(/["\047]/, "", n) }
+      line ~ /^  lifecycle:/ { lc=line; sub(/^  lifecycle:[[:space:]]*/, "", lc); gsub(/["\047[:space:]]/, "", lc) }
+      END { flush() }')"
   igs="$(printf '%s\n%s\n' "$igs" "$_extra_excl" | sed '/^$/d' | sort -u)"
   ERRAND_BY_DEP["$d"]="$igs"
   [[ -n "$igs" ]] && excl_note+="${d}: $(paste -sd ', ' <<<"$igs"); "
@@ -310,10 +365,11 @@ done < <(bosh cloud-config 2>/dev/null | awk '
 # ===========================================================================
 section "2. VM & Process Health"
 for d in "${DEPLOYMENTS[@]}"; do
+  progress "  [$d] instance/process state ..."
   rows="$(bosh --json -d "$d" instances --ps 2>/dev/null \
             | jq -c --arg err "${ERRAND_BY_DEP[$d]:-}" '
                 ($err | split("\n") | map(select(length>0))) as $E
-                | .Tables[0].Rows[]
+                | .Tables[0].Rows[]?
                 | select( (.instance | split("/")[0]) as $ig | ($E | index($ig) | not) )')"
   [[ -z "$rows" ]] && { warn "[$d] could not list instances."; continue; }
 
@@ -336,7 +392,8 @@ for d in "${DEPLOYMENTS[@]}"; do
     affected="$( { cut -f1 <<<"$bad_vms"; sed -E 's/ .*//' <<<"$bad_procs"; } | sed '/^$/d' | sort -u )"
     while read -r inst; do
       [[ -z "$inst" ]] && continue
-      raw="$(monit_raw "$d" "$inst")"
+      progress "  [$d] querying monit on ${inst} (up to 90s) ..."
+      monit_raw "$d" "$inst"; raw="$MONIT_OUT"
       if grep -q 'Monit daemon' <<<"$raw"; then
         bad="$(awk -F"'" '/^Process /{st=$3; sub(/^[[:space:]]+/,"",st); if(st!="running") print $2"\t"st}' <<<"$raw")"
         if [[ -n "$bad" ]]; then
@@ -347,8 +404,8 @@ for d in "${DEPLOYMENTS[@]}"; do
           info "[$d] ${inst}: monit reports all processes running (VM-level state may be transient)."
         fi
       else
-        # monit unreachable (agent/VM likely down) — fall back to BOSH-reported state.
-        warn "[$d] ${inst}: could not reach monit (agent/VM may be down); using BOSH-reported state."
+        # monit unreachable — say why (captured by monit_raw), fall back to BOSH state.
+        warn "[$d] ${inst}: could not get monit status (${MONIT_ERR:-no error output; agent/VM may be down}); using BOSH-reported state."
         while IFS=$'\t' read -r ip st; do
           [[ "$ip" == "${inst} "* ]] && crit "[$d] process down: ${ip} -> ${st:-unknown}"
         done <<<"$bad_procs"
@@ -371,6 +428,12 @@ _vm_chk(){ local v=$1 w=$2 cc=$3 lbl=$4 c
   if [[ $c == CRIT ]]; then vm_worst=CRIT; elif [[ $vm_worst != CRIT ]]; then vm_worst=WARN; fi
 }
 for d in "${DEPLOYMENTS[@]}"; do
+  progress "  [$d] fetching vitals ..."
+  vit="$(bosh --json -d "$d" vms --vitals 2>/dev/null | jq -r '.Tables[0].Rows[]? |
+      [.instance, .vm_type, .process_state, .memory_usage, .ephemeral_disk_usage,
+       .persistent_disk_usage, .system_disk_usage, .cpu_user, .cpu_sys, .cpu_wait,
+       .load_1m_5m_15m] | map(if .==null or .=="" then "-" else . end) | @tsv')"
+  [[ -z "$vit" ]] && { warn "[$d] could not fetch VM vitals — resource checks skipped for this deployment."; continue; }
   while IFS=$'\t' read -r inst vmtype state mem eph per sys cu cs cw load; do
     [[ -z "$inst" ]] && continue
     ig="${inst%%/*}"; is_errand_ig "$d" "$ig" && continue
@@ -391,10 +454,7 @@ for d in "${DEPLOYMENTS[@]}"; do
     _vm_chk "$sp"  $DISK_WARN $DISK_CRIT "system disk"
     _vm_chk "$cpu" $CPU_WARN  $CPU_CRIT  "CPU"
     [[ $vm_worst == OK ]] && ok "[$d] ${ig} within thresholds (cpu ${cpu}% mem ${mp/-1/–}% eph ${ep/-1/–}% per ${pp/-1/–}% sys ${sp/-1/–}%)"
-  done < <(bosh --json -d "$d" vms --vitals 2>/dev/null | jq -r '.Tables[0].Rows[] |
-      [.instance, .vm_type, .process_state, .memory_usage, .ephemeral_disk_usage,
-       .persistent_disk_usage, .system_disk_usage, .cpu_user, .cpu_sys, .cpu_wait,
-       .load_1m_5m_15m] | map(if .==null or .=="" then "-" else . end) | @tsv')
+  done <<<"$vit"
 done
 info "Thresholds: mem ${MEM_WARN}/${MEM_CRIT}%, disk ${DISK_WARN}/${DISK_CRIT}%, cpu ${CPU_WARN}/${CPU_CRIT}%  (WARN/CRIT)"
 
@@ -404,6 +464,10 @@ info "Thresholds: mem ${MEM_WARN}/${MEM_CRIT}%, disk ${DISK_WARN}/${DISK_CRIT}%,
 section "4. Allocated vs Utilized (per VM)"
 printf '  %-22s %-12s   %18s   %18s   %10s\n' "INSTANCE" "VM_TYPE" "RAM used/alloc" "EPHEM used/alloc" "RAM ratio"
 for d in "${DEPLOYMENTS[@]}"; do
+  progress "  [$d] allocation vs utilization ..."
+  vit="$(bosh --json -d "$d" vms --vitals 2>/dev/null | jq -r '.Tables[0].Rows[]? |
+      [.instance, .vm_type, .memory_usage, .ephemeral_disk_usage] | map(if .==null or .=="" then "-" else . end) | @tsv')"
+  [[ -z "$vit" ]] && { warn "[$d] could not fetch VM vitals — allocation ratings skipped for this deployment."; continue; }
   while IFS=$'\t' read -r inst vmtype mem eph; do
     [[ -z "$inst" ]] && continue
     ig="${inst%%/*}"; is_errand_ig "$d" "$ig" && continue
@@ -427,8 +491,7 @@ for d in "${DEPLOYMENTS[@]}"; do
     else
       report "$(classify "$rnum" $MEM_WARN $MEM_CRIT)" "[$d] ${ig} RAM allocation ${rnum}% used ($(mb_h "$used_ram") of $(mb_h "$alloc_ram"))"
     fi
-  done < <(bosh --json -d "$d" vms --vitals 2>/dev/null | jq -r '.Tables[0].Rows[] |
-      [.instance, .vm_type, .memory_usage, .ephemeral_disk_usage] | map(if .==null or .=="" then "-" else . end) | @tsv')
+  done <<<"$vit"
 done
 info "Allocated = vm_type capacity from cloud-config; Utilized = live BOSH vitals. RAM ratio rated vs mem ${MEM_WARN}/${MEM_CRIT}% (WARN/CRIT); a low ratio is over-provisioned and acceptable."
 
@@ -452,7 +515,7 @@ for d in "${DEPLOYMENTS[@]}"; do
     cell_n=$((cell_n+1))
     info "$(printf '  %-22s %s vCPU / %s RAM / %s disk | OS-used %s (%s%%) | load%s' \
       "${ig}/${inst##*/}" "$alloc_cpu" "$(mb_h "$alloc_ram")" "$(mb_h "$alloc_disk")" "$(mb_h "$used_ram")" "$ratio" "${load%%,*}")"
-  done < <(bosh --json -d "$d" vms --vitals 2>/dev/null | jq -r '.Tables[0].Rows[] |
+  done < <(bosh --json -d "$d" vms --vitals 2>/dev/null | jq -r '.Tables[0].Rows[]? |
       [.instance, .vm_type, .memory_usage, .load_1m_5m_15m] | map(if .==null or .=="" then "-" else . end) | @tsv')
 done
 
@@ -465,6 +528,7 @@ else
   info ""
   info "Container allocation (Diego BBS via cfdot cell-states):"
   # Fetch cell capacity and app-instance state in a single login-shell SSH.
+  progress "  querying Diego BBS via cfdot on ${first_cell_grp}/0 (up to 150s) ..."
   raw="$(timeout 150 bosh -d "$first_cell_dep" ssh "${first_cell_grp}/0" \
           -c 'bash -lc "echo @@CS; cfdot cell-states; echo @@LRP; cfdot actual-lrps"' 2>/dev/null \
           | sed -e 's/\r$//' -e 's/^[^|]*stdout | //')"
@@ -654,13 +718,14 @@ section "9. MySQL / Galera Cluster"
 mon_dep=""; mon_grp=""
 for d in "${DEPLOYMENTS[@]}"; do
   g="$(bosh --json -d "$d" instances 2>/dev/null \
-        | jq -r '.Tables[0].Rows[].instance' | sed -E 's#/.*##' | sort -u \
+        | jq -r '.Tables[0].Rows[]?.instance' | sed -E 's#/.*##' | sort -u \
         | grep -E '^mysql[-_]monitor' | head -1)"
   [[ -n "$g" ]] && { mon_dep="$d"; mon_grp="$g"; break; }
 done
 if [[ -z "$mon_grp" ]]; then
   info "No mysql_monitor VM present (small-footprint) — skipping mysql-diag; MySQL VM/processes/resources covered in sections 2–4."
 else
+  progress "  running mysql-diag on ${mon_grp}/0 (up to 120s) ..."
   out="$(timeout 120 bosh -d "$mon_dep" ssh "${mon_grp}/0" \
           -c 'sudo /var/vcap/jobs/mysql-diag/bin/mysql-diag' 2>/dev/null \
           | sed -e 's/\r$//' -e 's/^[^|]*stdout | //')"
@@ -810,4 +875,5 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf -- '\n---\n_Generated by pcf-health-check.sh — read-only pre-upgrade health check._\n'
   } >&3
 fi
+progress "done — verdict ${verdict} (${OK_COUNT} ok / ${WARN_COUNT} warn / ${CRIT_COUNT} crit)"
 exit $exit_code
