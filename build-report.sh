@@ -66,7 +66,9 @@ else
   # build failure, so don't let pipefail+set -e abort here. Validate by content.
   REMOTE_CMD="${REMOTE_SCRIPT} --markdown"
   [[ -n "$FOUNDATION" ]] && REMOTE_CMD="FOUNDATION_NAME='${FOUNDATION}' ${REMOTE_CMD}"
-  ssh "${SSH_OPTS[@]}" "$OPSMAN" "$REMOTE_CMD" 2>/dev/null \
+  # Remote stderr passes through to the terminal on purpose: the script narrates
+  # per-section progress there in --markdown mode (stdout stays the document).
+  ssh "${SSH_OPTS[@]}" "$OPSMAN" "$REMOTE_CMD" \
     | grep -v 'Unauthorized use\|subject to logging' > "${OUT}.md" || true
   grep -q "$VALIDATE" "${OUT}.md" || { echo "ERROR: report incomplete (no '${VALIDATE}')"; exit 1; }
   MD_FILE="${OUT}.md"

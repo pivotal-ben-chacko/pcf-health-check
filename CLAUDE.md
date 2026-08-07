@@ -65,6 +65,16 @@ scp pcf-health-check.sh ubuntu@192.168.2.85:~/   # then ssh in
 ./pcf-health-check.sh --foundation FOG   # title -> "PCF FOG Foundation Health Check"
 ```
 
+In `--json`/`--markdown` mode the script emits a progress heartbeat (section
+starts + slow SSH steps, stamped with elapsed seconds) on **stderr**, since
+stdout is the document. `--progress-file <path>` (or `PROGRESS_FILE=<path>`)
+writes to a file instead — and in the quiet modes that file also receives the
+full human-readable check log (normally discarded), so `tail -f` shows every
+finding live; the document itself still renders only at the end (summary
+tables/score need the full run). `PROGRESS=0` disables the heartbeat.
+`build-report.sh` deliberately passes remote stderr through so the heartbeat
+is visible during the `[1/3]` SSH step.
+
 The report title is `PCF <name> Foundation Health Check`; set `<name>` with
 `--foundation <name>` / `--foundation=<name>` or the `FOUNDATION_NAME` env var
 (defaults to `/ TAS`, preserving the original title).
