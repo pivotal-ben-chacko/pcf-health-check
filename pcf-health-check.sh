@@ -44,6 +44,9 @@ MEM_WARN=${MEM_WARN:-85};   MEM_CRIT=${MEM_CRIT:-95}
 DISK_WARN=${DISK_WARN:-80}; DISK_CRIT=${DISK_CRIT:-90}
 SWAP_WARN=${SWAP_WARN:-20}; SWAP_CRIT=${SWAP_CRIT:-50}
 CPU_WARN=${CPU_WARN:-80};   CPU_CRIT=${CPU_CRIT:-95}
+# Diego cell memory reserved in the BBS (allocated/capacity %). Prod clusters that
+# intentionally run hot may want these raised (e.g. CELL_WARN=90 CELL_CRIT=97).
+CELL_WARN=${CELL_WARN:-85}; CELL_CRIT=${CELL_CRIT:-95}
 
 # Certificate expiry windows (Ops Manager 'expires_within' syntax: 1w/1m/1y).
 CERT_WARN_WINDOW=${CERT_WARN_WINDOW:-1m}; CERT_CRIT_WINDOW=${CERT_CRIT_WINDOW:-1w}
@@ -298,23 +301,14 @@ mapfile -t DEPLOYMENTS < <(bosh --json deployments 2>/dev/null | jq -r '.Tables[
 info "Deployments: ${DEPLOYMENTS[*]}"
 progress "inventorying ${#DEPLOYMENTS[@]} deployment(s) (stemcells, errand groups) ..."
 
-# Stemcell(s) actually in use per deployment, from `bosh vms` (the per-VM view is
-# authoritative — it surfaces a mid-rolling-upgrade split that the deployment-level
-# column would hide). Distinct stemcells per deployment, comma-joined. Consumed by
-# the stemcell check (section 7) and the final summary.
-STEMCELLS_BY_DEP=""
-for d in "${DEPLOYMENTS[@]}"; do
-  stms="$(bosh -d "$d" --json vms 2>/dev/null \
-           | jq -r '.Tables[0].Rows[]?.stemcell' 2>/dev/null \
-           | sed '/^$/d' | sort -u | paste -sd ', ' -)"
-  STEMCELLS_BY_DEP+="${d}"$'\t'"${stms:-none}"$'\n'
-done
-
 # Errand instance groups per deployment (lifecycle: errand in the manifest), plus
 # any names forced via EXTRA_EXCLUDE_GROUPS. The per-VM checks skip these so a
 # one-off errand instance never registers as a false failure or pulls the score
 # down. is_errand_ig <dep> <ig> is the membership test used throughout.
-declare -A ERRAND_BY_DEP
+# DEP_ERRAND_ONLY marks deployments whose EVERY instance group is excluded
+# (e.g. bosh-health, splunk-nozzle): they own no long-running VMs, so the
+# per-VM sections skip them entirely instead of warning about empty listings.
+declare -A ERRAND_BY_DEP DEP_ERRAND_ONLY
 _extra_excl="$(tr ', ' '\n\n' <<<"$EXTRA_EXCLUDE_GROUPS" | sed '/^$/d')"
 excl_note=""
 for d in "${DEPLOYMENTS[@]}"; do
@@ -323,8 +317,8 @@ for d in "${DEPLOYMENTS[@]}"; do
   # Parse per list item: collect both keys at item-top indent, decide at the
   # item boundary. "- key:" is normalized to "  key:" to also cover the classic
   # hand-written style where name rides the dash line.
-  igs="$(bosh -d "$d" manifest 2>/dev/null | awk '
-      function flush(){ if (lc=="errand" && n!="") print n; n=""; lc="" }
+  pairs="$(bosh -d "$d" manifest 2>/dev/null | awk '
+      function flush(){ if (n!="") print n "\t" (lc==""?"service":lc); n=""; lc="" }
       /^instance_groups:/ { f=1; next }
       f && /^[^ ]/ && !/^- / { flush(); f=0 }
       !f { next }
@@ -333,8 +327,14 @@ for d in "${DEPLOYMENTS[@]}"; do
       line ~ /^  name:/ { n=line; sub(/^  name:[[:space:]]*/, "", n); gsub(/["\047]/, "", n) }
       line ~ /^  lifecycle:/ { lc=line; sub(/^  lifecycle:[[:space:]]*/, "", lc); gsub(/["\047[:space:]]/, "", lc) }
       END { flush() }')"
+  igs="$(awk -F'\t' '$2=="errand"{print $1}' <<<"$pairs")"
   igs="$(printf '%s\n%s\n' "$igs" "$_extra_excl" | sed '/^$/d' | sort -u)"
   ERRAND_BY_DEP["$d"]="$igs"
+  DEP_ERRAND_ONLY["$d"]=0
+  if [[ -n "$pairs" && -n "$igs" ]]; then
+    non_excl="$(cut -f1 <<<"$pairs" | sort -u | grep -vxF -f <(printf '%s\n' "$igs") || true)"
+    [[ -z "$non_excl" ]] && DEP_ERRAND_ONLY["$d"]=1
+  fi
   [[ -n "$igs" ]] && excl_note+="${d}: $(paste -sd ', ' <<<"$igs"); "
 done
 if [[ -n "$excl_note" ]]; then
@@ -345,6 +345,25 @@ fi
 
 # True when instance group $2 in deployment $1 is an errand (skip it in VM checks).
 is_errand_ig(){ local l="${ERRAND_BY_DEP[$1]:-}"; [[ -n "$l" ]] && grep -qxF "$2" <<<"$l"; }
+# True when deployment $1 has no long-running instance groups at all.
+is_errand_only_dep(){ [[ "${DEP_ERRAND_ONLY[$1]:-0}" == 1 ]]; }
+
+# Stemcell(s) actually in use per deployment, from `bosh vms` (the per-VM view is
+# authoritative — it surfaces a mid-rolling-upgrade split that the deployment-level
+# column would hide). Distinct stemcells per deployment, comma-joined. Consumed by
+# the stemcell check (section 7) and the final summary. Errand-only deployments
+# have no VMs, hence no stemcell — label them as such rather than "none".
+STEMCELLS_BY_DEP=""
+for d in "${DEPLOYMENTS[@]}"; do
+  if is_errand_only_dep "$d"; then
+    STEMCELLS_BY_DEP+="${d}"$'\t'"errand-only (no VMs)"$'\n'
+    continue
+  fi
+  stms="$(bosh -d "$d" --json vms 2>/dev/null \
+           | jq -r '.Tables[0].Rows[]?.stemcell' 2>/dev/null \
+           | sed '/^$/d' | sort -u | paste -sd ', ' -)"
+  STEMCELLS_BY_DEP+="${d}"$'\t'"${stms:-none}"$'\n'
+done
 
 # Load vm_type -> cpu/ram(MB)/disk(MB) map from the cloud-config (allocated capacity).
 declare -A VT_CPU VT_RAM VT_DISK
@@ -365,6 +384,7 @@ done < <(bosh cloud-config 2>/dev/null | awk '
 # ===========================================================================
 section "2. VM & Process Health"
 for d in "${DEPLOYMENTS[@]}"; do
+  is_errand_only_dep "$d" && { info "[$d] errand-only deployment (no long-running VMs) — skipped."; continue; }
   progress "  [$d] instance/process state ..."
   rows="$(bosh --json -d "$d" instances --ps 2>/dev/null \
             | jq -c --arg err "${ERRAND_BY_DEP[$d]:-}" '
@@ -428,6 +448,7 @@ _vm_chk(){ local v=$1 w=$2 cc=$3 lbl=$4 c
   if [[ $c == CRIT ]]; then vm_worst=CRIT; elif [[ $vm_worst != CRIT ]]; then vm_worst=WARN; fi
 }
 for d in "${DEPLOYMENTS[@]}"; do
+  is_errand_only_dep "$d" && continue
   progress "  [$d] fetching vitals ..."
   vit="$(bosh --json -d "$d" vms --vitals 2>/dev/null | jq -r '.Tables[0].Rows[]? |
       [.instance, .vm_type, .process_state, .memory_usage, .ephemeral_disk_usage,
@@ -464,6 +485,7 @@ info "Thresholds: mem ${MEM_WARN}/${MEM_CRIT}%, disk ${DISK_WARN}/${DISK_CRIT}%,
 section "4. Allocated vs Utilized (per VM)"
 printf '  %-22s %-12s   %18s   %18s   %10s\n' "INSTANCE" "VM_TYPE" "RAM used/alloc" "EPHEM used/alloc" "RAM ratio"
 for d in "${DEPLOYMENTS[@]}"; do
+  is_errand_only_dep "$d" && continue
   progress "  [$d] allocation vs utilization ..."
   vit="$(bosh --json -d "$d" vms --vitals 2>/dev/null | jq -r '.Tables[0].Rows[]? |
       [.instance, .vm_type, .memory_usage, .ephemeral_disk_usage] | map(if .==null or .=="" then "-" else . end) | @tsv')"
@@ -503,6 +525,7 @@ section "5. Diego Cells"
 cell_n=0; first_cell_dep=""; first_cell_grp=""
 info "VM-level (provisioned capacity vs OS-utilized):"
 for d in "${DEPLOYMENTS[@]}"; do
+  is_errand_only_dep "$d" && continue
   while IFS=$'\t' read -r inst vmtype mem load; do
     [[ -z "$inst" ]] && continue
     ig="${inst%%/*}"
@@ -548,7 +571,7 @@ else
       printf '  %-12s %7s / %-6s %12s %7s/%-6s %5s%%\n' \
         "$cid" "$(mb_h "$alloc")" "$(mb_h "$tmem")" "$(mb_h "$amem")" "$((tcon-acon))" "$tcon" "$apct"
       MD_CELLS+="| ${cid} | $(mb_h "$alloc") | $(mb_h "$tmem") | $(mb_h "$amem") | $((tcon-acon))/${tcon} | ${apct}% |"$'\n'
-      v=$(classify "$apct" 85 95); [[ $v != OK ]] && report "$v" "cell ${cid} at ${apct}% memory reserved — little room to place more containers."
+      v=$(classify "$apct" $CELL_WARN $CELL_CRIT); [[ $v != OK ]] && report "$v" "cell ${cid} at ${apct}% memory reserved — little room to place more containers."
     done < <(jq -r '[.cell_id[0:8], .TotalResources.MemoryMB, .AvailableResources.MemoryMB,
                      .TotalResources.Containers, .AvailableResources.Containers] | @tsv' <<<"$cs")
 
@@ -717,6 +740,7 @@ section "9. MySQL / Galera Cluster"
 # — the DB VM, its Galera/PXC processes, and resources are still covered in 2–4.
 mon_dep=""; mon_grp=""
 for d in "${DEPLOYMENTS[@]}"; do
+  is_errand_only_dep "$d" && continue
   g="$(bosh --json -d "$d" instances 2>/dev/null \
         | jq -r '.Tables[0].Rows[]?.instance' | sed -E 's#/.*##' | sort -u \
         | grep -E '^mysql[-_]monitor' | head -1)"
@@ -737,8 +761,12 @@ else
       crit "mysql-diag reports a CRITICAL cluster issue on ${mon_grp} — resolve before upgrading (see detail below)."
     elif grep -qiE 'warning|diverg|behind|read-only' <<<"$out"; then
       warn "mysql-diag reports a warning on ${mon_grp} — review cluster state before upgrading (see detail below)."
-    else
+    elif [[ "${synced:-0}" -gt 0 ]]; then
       ok "mysql-diag: Galera cluster healthy on ${mon_grp} (${synced} node(s) reported Synced)."
+    else
+      # No alarm keywords, but no 'Synced' either — the output format may not be
+      # what this parser expects. Never report healthy on evidence we didn't find.
+      warn "mysql-diag ran on ${mon_grp} but no node reported 'Synced' — output format may differ from what this check expects; verify cluster state manually (see detail below)."
     fi
     # Surface the key status lines so the operator sees mysql-diag's own verdict.
     while IFS= read -r line; do [[ -n "$line" ]] && info "  ${line}"; done \
@@ -813,7 +841,8 @@ if [[ $MD_MODE -eq 1 ]]; then
     printf '| **Run on** | `%s@%s` |\n' "$(whoami)" "$(hostname)"
     printf '| **Deployments** | %s |\n' "${DEPLOYMENTS[*]}"
     # One stemcell per line in the cell (<br> = a line break once pandoc renders it).
-    stm_used="$(cut -f2 <<<"$STEMCELLS_BY_DEP" | tr ',' '\n' | sed 's/^ *//;s/ *$//;/^$/d' | sort -u | paste -sd $'\t' - | sed 's/\t/<br>/g')"
+    stm_used="$(cut -f2 <<<"$STEMCELLS_BY_DEP" | tr ',' '\n' | sed 's/^ *//;s/ *$//;/^$/d' \
+                | grep -vE '^(none|errand-only)' | sort -u | paste -sd $'\t' - | sed 's/\t/<br>/g')"
     printf '| **Stemcell(s) in use** | %s |\n' "${stm_used:-?}"
     printf '| **Checks (OK / Warn / Crit)** | %s / %s / %s |\n' "$OK_COUNT" "$WARN_COUNT" "$CRIT_COUNT"
     printf '| **Health score** | **%s%%** |\n\n' "$HEALTH_SCORE"
