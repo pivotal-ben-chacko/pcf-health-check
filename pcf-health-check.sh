@@ -576,7 +576,11 @@ else
                      .TotalResources.Containers, .AvailableResources.Containers] | @tsv' <<<"$cs")
 
     agg=$(awk -v c="$tot_cap" -v a="$tot_avail" 'BEGIN{ if(c>0) printf "%.0f", (c-a)*100/c; else print 0 }')
-    info "Cells: ${bbs_n} | cluster RAM reserved/capacity: $(mb_h $((tot_cap-tot_avail))) / $(mb_h "$tot_cap") (${agg}%) | available: $(mb_h "$tot_avail")"
+    # Headroom: share of cluster RAM still unreserved, i.e. room for additional
+    # app instances (subject to per-cell placement — one instance must fit in a
+    # single cell's free chunk, so treat this as the upper bound).
+    headroom=$(awk -v c="$tot_cap" -v a="$tot_avail" 'BEGIN{ if(c>0) printf "%.0f", a*100/c; else print 0 }')
+    info "Cells: ${bbs_n} | cluster RAM reserved/capacity: $(mb_h $((tot_cap-tot_avail))) / $(mb_h "$tot_cap") (${agg}%) | available: $(mb_h "$tot_avail") = ${headroom}% headroom for additional apps"
 
     # Rolling-upgrade headroom: BOSH recreates cells one (batch) at a time; the drained
     # cell's containers must reschedule onto the survivors. Losing the *largest* cell is
@@ -587,6 +591,40 @@ else
       ok "Available $(mb_h "$tot_avail") >= largest cell $(mb_h "$max_tmem") — a cell can be drained during a rolling upgrade without exhausting placement capacity."
     else
       crit "Available RAM $(mb_h "$tot_avail") < largest cell capacity $(mb_h "$max_tmem") — draining a cell may fail to reschedule its apps. Scale out cells or reduce load before upgrading."
+    fi
+
+    # Diego cell max_in_flight vs the drain ceiling. Ops Manager stores it per
+    # job behind an API-only endpoint; the TAS product guid IS the cf deployment
+    # name, and the cell job key starts with the cell instance-group name. A
+    # percentage resolves against the live cell count (floor, min 1) — that many
+    # cells recreate concurrently, each consuming ~one cell of headroom.
+    if command -v om >/dev/null && [[ $bbs_n -gt 1 && ${max_tmem:-0} -gt 0 ]]; then
+      drain_ceiling=$(( tot_avail / max_tmem ))
+      mif_raw="$(om curl -s -p "/api/v0/staged/products/${first_cell_dep}/max_in_flight" 2>/dev/null \
+                 | jq -r --arg g "$first_cell_grp" \
+                     '.max_in_flight // {} | to_entries[] | select(.key | startswith($g + "-")) | .value' 2>/dev/null \
+                 | head -1)"
+      mif_cells=""
+      if [[ "$mif_raw" == *% ]]; then
+        mif_cells=$(( bbs_n * ${mif_raw%\%} / 100 )); [[ $mif_cells -lt 1 ]] && mif_cells=1
+      elif [[ "$mif_raw" =~ ^[0-9]+$ ]]; then
+        mif_cells=$mif_raw
+      fi
+      if [[ -n "$mif_cells" && $drain_ceiling -gt 0 ]]; then
+        MIF_SUMMARY="diego_cell max_in_flight ${mif_raw} → ≈${mif_cells} cell(s) per batch vs drain ceiling ≈${drain_ceiling}"
+        if [[ $mif_cells -gt $drain_ceiling ]]; then
+          crit "diego_cell max_in_flight ${mif_raw} recreates ≈${mif_cells} cells concurrently but headroom absorbs only ≈${drain_ceiling} — lower max_in_flight or add cells before upgrading."
+        elif [[ $(( mif_cells * 2 )) -gt $drain_ceiling ]]; then
+          warn "diego_cell max_in_flight ${mif_raw} (≈${mif_cells} cells/batch) consumes over half the drain ceiling (≈${drain_ceiling}) — little margin if load grows during the upgrade window."
+        else
+          ok "diego_cell max_in_flight ${mif_raw} → ≈${mif_cells} cell(s) per batch, comfortably within drain ceiling ≈${drain_ceiling}."
+        fi
+      elif [[ -n "$mif_raw" ]]; then
+        MIF_SUMMARY="diego_cell max_in_flight '${mif_raw}'"
+        info "diego_cell max_in_flight is '${mif_raw}' — cannot translate to a cell count; compare manually against drain ceiling ≈${drain_ceiling}."
+      else
+        info "Could not read max_in_flight from Ops Manager (om unavailable for product ${first_cell_dep}) — skipping the in-flight vs headroom check."
+      fi
     fi
 
     # --- 5c. App-instance health from the BBS (cfdot actual-lrps) -----------
@@ -717,18 +755,23 @@ if command -v om >/dev/null; then
   cy="$(om curl -s -p "/api/v0/deployed/certificates?expires_within=1y" 2>/dev/null | jq -r '.certificates|length' 2>/dev/null)"
   if [[ -z "$cy" ]]; then
     warn "Could not read certificate expiry from Ops Manager — verify manually before upgrading."
+    CERT_SUMMARY="⚠️ expiry unavailable from Ops Manager — verify manually"
   else
     info "Deployed certificates: ${total:-?} total | expiring ≤${CERT_CRIT_WINDOW}: ${cc:-0} · ≤${CERT_WARN_WINDOW}: ${cw:-0} · ≤1y: ${cy}"
     if [[ "${cc:-0}" -gt 0 ]]; then
       crit "${cc} certificate(s) expire within ${CERT_CRIT_WINDOW} — rotate before upgrading (Ops Manager > Settings > Advanced > Rotate, or 'om regenerate-certificates')."
+      CERT_SUMMARY="❌ ${cc} expiring ≤${CERT_CRIT_WINDOW} — rotate BEFORE upgrading (${total:-?} deployed, ${cy} within 1y)"
     elif [[ "${cw:-0}" -gt 0 ]]; then
       warn "${cw} certificate(s) expire within ${CERT_WARN_WINDOW} — plan rotation soon."
+      CERT_SUMMARY="⚠️ ${cw} expiring ≤${CERT_WARN_WINDOW} — plan rotation (${total:-?} deployed, ${cy} within 1y)"
     else
       ok "No certificates expiring within ${CERT_WARN_WINDOW}."
+      CERT_SUMMARY="✅ none expiring ≤${CERT_WARN_WINDOW} (${total:-?} deployed, ${cy} within 1y)"
     fi
   fi
 else
   info "om CLI not available — skipping certificate check."
+  CERT_SUMMARY="not checked (om CLI unavailable)"
 fi
 
 # ===========================================================================
@@ -788,6 +831,13 @@ while IFS=$'\t' read -r dep stm; do
   printf '    %-28s %s\n' "$dep" "${stm:-none}"
 done <<<"$STEMCELLS_BY_DEP"
 
+printf '\n  %sCertificates:%s %s\n' "$BOLD" "$RST" "${CERT_SUMMARY:-not checked}"
+if [[ -n "${bbs_n:-}" && "${tot_cap:-0}" -gt 0 && "${max_tmem:-0}" -gt 0 ]]; then
+  printf '  %sDiego headroom:%s %s free of %s (%s%%) — absorbs ≈%s concurrent cell drain(s)\n' \
+    "$BOLD" "$RST" "$(mb_h "$tot_avail")" "$(mb_h "$tot_cap")" "${headroom:-?}" "$((tot_avail / max_tmem))"
+fi
+[[ -n "${MIF_SUMMARY:-}" ]] && printf '  %smax_in_flight:%s %s\n' "$BOLD" "$RST" "$MIF_SUMMARY"
+
 # Health score (1-100): weighted pass ratio, then capped by severity so it can
 # never disagree with the verdict (a lone CRIT among many OKs still scores <=cap).
 HEALTH_SCORE="$(awk -v ok="$OK_COUNT" -v w="$WARN_COUNT" -v c="$CRIT_COUNT" \
@@ -834,7 +884,9 @@ if [[ $MD_MODE -eq 1 ]]; then
   md_bullets(){ awk -F'\t' -v s="$1" '$2==s{b=$1=="OK"?"✅":($1=="WARN"?"⚠️":($1=="CRIT"?"❌":"ℹ️")); m=$3; sub(/^ +/,"",m); print "- "b" "m}' <<<"$FINDINGS"; }
   {
     printf '# %s\n\n' "$REPORT_TITLE"
-    printf '> **%s Verdict: %s** — %s\n>\n> **Health score: %s%%**\n\n' "$vb" "$verdict" "$vmsg" "$HEALTH_SCORE"
+    # The terminal verdict says "above" (it prints after the findings); in the
+    # document the banner is at the top, so the findings are below it.
+    printf '> **%s Verdict: %s** — %s\n>\n> **Health score: %s%%**\n\n' "$vb" "$verdict" "${vmsg/above./below.}" "$HEALTH_SCORE"
     printf '| | |\n|---|---|\n'
     printf '| **Director** | `%s` — %s v%s (%s) |\n' "${BOSH_ENVIRONMENT:-?}" "${DIR_NAME:-?}" "${DIR_VER:-?}" "${DIR_CPI:-?}"
     printf '| **Generated** | %s |\n' "$(date -u '+%Y-%m-%d %H:%M UTC')"
@@ -844,8 +896,25 @@ if [[ $MD_MODE -eq 1 ]]; then
     stm_used="$(cut -f2 <<<"$STEMCELLS_BY_DEP" | tr ',' '\n' | sed 's/^ *//;s/ *$//;/^$/d' \
                 | grep -vE '^(none|errand-only)' | sort -u | paste -sd $'\t' - | sed 's/\t/<br>/g')"
     printf '| **Stemcell(s) in use** | %s |\n' "${stm_used:-?}"
+    printf '| **Certificates** | %s |\n' "${CERT_SUMMARY:-not checked}"
+    # Diego headroom, when the BBS view was available: free/total cell RAM and the
+    # drain ceiling (how many cells can be recreated concurrently before the
+    # evacuated workload no longer fits — compare against diego_cell max_in_flight).
+    if [[ -n "${bbs_n:-}" && "${tot_cap:-0}" -gt 0 && "${max_tmem:-0}" -gt 0 ]]; then
+      printf '| **Diego cell headroom** | %s free of %s (%s%%) — absorbs ≈%s concurrent cell drain(s) |\n' \
+        "$(mb_h "$tot_avail")" "$(mb_h "$tot_cap")" "${headroom:-?}" "$((tot_avail / max_tmem))"
+    fi
+    [[ -n "${MIF_SUMMARY:-}" ]] && printf '| **max_in_flight** | %s |\n' "$MIF_SUMMARY"
     printf '| **Checks (OK / Warn / Crit)** | %s / %s / %s |\n' "$OK_COUNT" "$WARN_COUNT" "$CRIT_COUNT"
     printf '| **Health score** | **%s%%** |\n\n' "$HEALTH_SCORE"
+
+    # Every CRIT, up front — the reader must not have to dig through the body
+    # (which can run to dozens of pages) to learn what blocks the upgrade.
+    if [[ $CRIT_COUNT -gt 0 ]]; then
+      printf '## ❌ Critical findings (%s)\n\n' "$CRIT_COUNT"
+      awk -F'\t' '$1=="CRIT"{m=$3; sub(/^ +/,"",m); print "- ❌ **["$2"]** "m}' <<<"$FINDINGS"
+      printf '\n'
+    fi
 
     printf '## Summary by section\n\n'
     printf '| Section | ✅ OK | ⚠️ Warn | ❌ Crit |\n|---|--:|--:|--:|\n'
@@ -877,8 +946,8 @@ if [[ $MD_MODE -eq 1 ]]; then
     md_bullets "Allocated vs Utilized (per VM)"
 
     printf '\n## 5. Diego Cells\n\n'
-    [[ -n "${bbs_n:-}" ]] && printf '**Cells:** %s · reserved/capacity %s / %s (%s%%) · available %s · LRPs: %s\n\n' \
-        "$bbs_n" "$(mb_h $((tot_cap-tot_avail)))" "$(mb_h "$tot_cap")" "$agg" "$(mb_h "$tot_avail")" "${LRP_SUMMARY:-n/a}"
+    [[ -n "${bbs_n:-}" ]] && printf '**Cells:** %s · reserved/capacity %s / %s (%s%%) · available %s (**%s%% headroom** for additional apps) · LRPs: %s\n\n' \
+        "$bbs_n" "$(mb_h $((tot_cap-tot_avail)))" "$(mb_h "$tot_cap")" "$agg" "$(mb_h "$tot_avail")" "${headroom:-?}" "${LRP_SUMMARY:-n/a}"
     if [[ -n "$MD_CELLS" ]]; then
       printf '| Cell | Reserved | Capacity | Available | Containers | Reserved%% |\n|---|--:|--:|--:|--:|--:|\n'
       printf '%s\n' "$MD_CELLS"
