@@ -179,14 +179,19 @@ a {
   text-decoration: none;
 }
 
-/* Lists */
+/* Lists — the report body is mostly finding bullets with long bracketed
+   deployment/instance identifiers. Slightly smaller than body text and with a
+   tight indent so a typical ~120-char finding sits on ONE line on a Letter
+   page (verified empirically; the few 140+ char prose warnings still wrap). */
 ul, ol {
-  margin: 8px 0 12px 20px;
+  margin: 8px 0 12px 2px;
+  padding-left: 14px;
   color: #1A1A1A;
 }
 
 li {
   margin-bottom: 4px;
+  font-size: 9.25pt;
 }
 
 /* Italic footnotes/notes the report emits (thresholds, counts, generated-by). */
@@ -194,9 +199,11 @@ em {
   color: #6B6B6B;
 }
 
-/* Print: full-bleed, avoid awkward section/table splits. */
+/* Print: full-bleed, avoid awkward section/table splits. Narrow page margins
+   and body padding buy the horizontal room that keeps findings on one line. */
+@page { margin: 12mm 9mm; }
 @media print {
-  body { margin: 0; max-width: 100%; }
+  body { margin: 0; max-width: 100%; padding: 0 0.5rem; }
   h2 { page-break-after: avoid; }
   table { page-break-inside: avoid; }
 }
