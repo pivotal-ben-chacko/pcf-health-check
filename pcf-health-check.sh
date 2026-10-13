@@ -793,27 +793,43 @@ if [[ -z "$mon_grp" ]]; then
   info "No mysql_monitor VM present (small-footprint) — skipping mysql-diag; MySQL VM/processes/resources covered in sections 2–4."
 else
   progress "  running mysql-diag on ${mon_grp}/0 (up to 120s) ..."
-  out="$(timeout 120 bosh -d "$mon_dep" ssh "${mon_grp}/0" \
-          -c 'sudo /var/vcap/jobs/mysql-diag/bin/mysql-diag' 2>/dev/null \
-          | sed -e 's/\r$//' -e 's/^[^|]*stdout | //')"
+  # Run mysql-diag the way an operator does: in a login shell as the ssh user
+  # (the job wrapper relies on the login environment; under a bare `sudo` it
+  # fails and prints nothing useful). Fall back to sudo + full path if the
+  # first attempt yields no node rows. Remote stderr arrives as 'stderr |'
+  # lines on stdout; keep them so a failure reason can be shown. Strip ANSI
+  # colour codes (mysql-diag colours its NOTE line) before matching.
+  run_diag(){ # cmd -> cleaned output on stdout
+    timeout 120 bosh -d "$mon_dep" ssh "${mon_grp}/0" -c "$1" 2>/dev/null \
+      | sed -e 's/\r$//' -e 's/\x1b\[[0-9;]*m//g' -e 's/^[^|]*: std\(out\|err\) | //'
+  }
+  node_rows(){ grep -E '^\|\s*\[[0-9]+\]\s+mysql/' <<<"$1"; }
+  out="$(run_diag 'bash -lc mysql-diag')"
+  if [[ -z "$(node_rows "$out")" ]]; then
+    out2="$(run_diag 'sudo /var/vcap/jobs/mysql-diag/bin/mysql-diag')"
+    [[ -n "$(node_rows "$out2")" ]] && out="$out2" || out="${out}${out2:+$'\n'$out2}"
+  fi
   if [[ -z "$out" ]]; then
     warn "mysql-diag on ${mon_grp}/0 returned nothing (no privilege/timeout) — verify cluster health manually before upgrading."
   else
-    synced="$(grep -ioc 'synced' <<<"$out")"
-    if grep -qiE 'critical|unhealthy|not running|cannot connect|unreachable' <<<"$out"; then
-      crit "mysql-diag reports a CRITICAL cluster issue on ${mon_grp} — resolve before upgrading (see detail below)."
-    elif grep -qiE 'warning|diverg|behind|read-only' <<<"$out"; then
-      warn "mysql-diag reports a warning on ${mon_grp} — review cluster state before upgrading (see detail below)."
-    elif [[ "${synced:-0}" -gt 0 ]]; then
-      ok "mysql-diag: Galera cluster healthy on ${mon_grp} (${synced} node(s) reported Synced)."
+    nodes="$(node_rows "$out" | wc -l | tr -d ' ')"
+    synced="$(node_rows "$out" | grep -cE '\|\s*Synced\s*\|\s*Primary\s*\|' || true)"
+    seqnos="$(node_rows "$out" | grep -oE '\|\s*[0-9]{6,}\s*\|' | tr -d '| ' | sort -u | wc -l | tr -d ' ')"
+    if [[ "${nodes:-0}" -eq 0 ]]; then
+      # Not a parse-format problem we can fix here: show what came back so the
+      # operator sees the real reason (sudo rejection, missing config, etc.).
+      warn "mysql-diag ran on ${mon_grp} but returned no node rows — verify cluster state manually (output below)."
+      while IFS= read -r line; do [[ -n "$line" ]] && info "  ${line}"; done < <(head -8 <<<"$out")
+    elif [[ "$synced" -eq "$nodes" && "${seqnos:-1}" -le 1 ]]; then
+      ok "mysql-diag: Galera cluster healthy on ${mon_grp} (${synced}/${nodes} nodes Synced/Primary, seqno in step)."
+    elif [[ "$synced" -eq "$nodes" ]]; then
+      warn "mysql-diag: ${synced}/${nodes} nodes Synced/Primary on ${mon_grp} but seqnos differ (${seqnos} distinct) — cluster may be catching up; re-check before upgrading."
     else
-      # No alarm keywords, but no 'Synced' either — the output format may not be
-      # what this parser expects. Never report healthy on evidence we didn't find.
-      warn "mysql-diag ran on ${mon_grp} but no node reported 'Synced' — output format may differ from what this check expects; verify cluster state manually (see detail below)."
+      crit "mysql-diag: only ${synced} of ${nodes} Galera nodes are Synced/Primary on ${mon_grp} — resolve before upgrading (see detail below)."
     fi
-    # Surface the key status lines so the operator sees mysql-diag's own verdict.
+    # Surface the node rows and mysql-diag's own notes so the report shows its verdict.
     while IFS= read -r line; do [[ -n "$line" ]] && info "  ${line}"; done \
-      < <(grep -iE 'synced|wsrep|canary|healthy|unhealthy|critical|warning|host|node' <<<"$out" | head -20)
+      < <({ node_rows "$out" | sed -E 's/\s+/ /g'; grep -iE '^NOTE|wsrep|canary|unhealthy|critical|warning' <<<"$out"; } | head -12)
   fi
 fi
 
