@@ -9,16 +9,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   Tunable thresholds via env vars at the top; `--no-color` for logs, `--json` for a
   CI-gate summary (findings tagged by section/level; written to stdout, human output
   suppressed). Sections:
-  1. BOSH director (reachability, locks, tasks) + the **director VM** itself
+  1. BOSH director (reachability, locks, tasks, **resurrector** on/off via
+     `bosh curl /resurrection` — CRIT when disabled, INFO when unreadable; also a
+     `Resurrector` header row in the Markdown and `resurrector` in `--json`)
+     + the **director VM** itself
      (disk/`/var/vcap/store`, memory, load, monit processes via the bbr key)
   2. Per-VM BOSH process state across all deployments
   3. VM resource utilization (mem/disk/cpu/swap) vs thresholds
   4. Allocated (cloud-config `vm_type`) vs utilized (vitals) per VM
   5. Diego cells: VM capacity, BBS container reservations (`cfdot cell-states`),
      rolling-upgrade headroom, app-instance health (`cfdot actual-lrps`)
-  6. CF API reachability + org/space/app counts
+  6. CF API reachability + org/space/app counts, plus the **buildpack
+     inventory** (`cf curl /v3/buildpacks`: position, name, stack,
+     enabled/locked, filename). Informational only — INFO lines, a Markdown
+     `**Buildpacks:**` table and a `buildpacks` array in `--json`; never scored.
   7. Upgrade readiness: `om` pending changes (listed per product with action,
-     version transition and deployment guid), stemcell consistency, orphaned
+     version transition and deployment guid), the **deployed product
+     inventory** (`om curl /api/v0/deployed/products` joined to
+     `/api/v0/staged/products` by guid: label, type, deployed + staged version,
+     guid = BOSH deployment name, plus a count of BOSH deployments that are not
+     Ops Manager products; informational — INFO lines, a Markdown
+     `**Deployed tiles:**` table and a `products` array in `--json`, never
+     scored), stemcell consistency, orphaned
      disks, and ignored instances (`bosh instances --details` Ignore column —
      CRIT, since ignored VMs are skipped during the upgrade). Also lists the
      stemcell(s) in use per deployment, derived from `bosh vms` (per-VM, so a
@@ -42,6 +54,41 @@ Cert status caveat: this Ops Manager returns expiry only via the
 `expires_within` filter (dates are null in the full list), so section 8 reports
 counts per window (1w CRIT / 1m WARN / 1y info) plus the total deployed, not
 individual cert names.
+
+## Markdown contract with the dashboard script
+
+`cf_health_dashboard.py` (in this repo) renders the one-page dashboard
+PDF/PNG from the `--markdown` report by regex. Two tables are matched literally,
+so do not rename, add columns, add a count to the bold label, or use alignment
+colons in the separator row:
+
+- section 7: `**Deployed tiles:**` then `| Tile | Deployed | Staged |` (Tile =
+  product type, e.g. `cf`; Staged left blank when Ops Manager has none)
+- section 6: `**Buildpacks:**` then `| # | Buildpack | Stack | Version |`
+  (version parsed from the filename; ` (disabled)` appended to the name)
+
+It also reads the header-table row `| **Resurrector** | … |` and looks for the
+word `enabled` / `disabled` in it to drive its Resurrector status box.
+
+With these in the report the dashboard's `--products` / `--buildpacks` side
+files are no longer needed.
+
+## Building the one-page dashboard (run on the Mac)
+
+```sh
+PATH="$HOME/.venvs/cf-dashboard/bin:$PATH" python cf_health_dashboard.py <report>.md --png
+```
+
+Always writes the PDF (one Letter page, `<foundation>-health-dashboard-<date>.pdf`
+or `-o`); `--png` adds a 1600px image, `--html` keeps the HTML. `--foundation`,
+`--date "Month D, YYYY"` and `--certs-3m N` set the header/cert bar. Needs
+matplotlib + numpy (+ Pillow) and the `wkhtmltopdf`/`wkhtmltoimage` binaries: on
+this Mac they live in the `~/.venvs/cf-dashboard` virtualenv, with wkhtmltopdf
+0.12.6 unpacked from the official pkg into `~/.local/opt/wkhtmltox` (Homebrew no
+longer ships it; x86_64 under Rosetta) and symlinked into the venv's `bin`.
+Status boxes: BOSH Director · Cloud Foundry API · Resurrector · Gorouter ·
+MySQL/Galera. A disabled resurrector is its own red box and does not turn the
+Director box Unhealthy.
 
 ## Accessing the Operations Manager VM
 

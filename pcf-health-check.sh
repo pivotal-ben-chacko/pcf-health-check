@@ -14,7 +14,8 @@
 #
 # What it checks (the goal is to confirm the foundation is healthy BEFORE a
 # standard TAS/PCF upgrade):
-#   1. BOSH director reachability, stuck locks, in-flight tasks, and the director
+#   1. BOSH director reachability, stuck locks, in-flight tasks, resurrector
+#      on/off (bosh curl /resurrection — CRIT when disabled), and the director
 #      VM itself (disk/memory/monit processes, reached with the bbr key)
 #   2. Every VM's BOSH process state across all deployments (failing jobs,
 #      unresponsive agents)
@@ -24,9 +25,10 @@
 #      vm_type from the cloud-config to its live vitals
 #   5. Diego cells: VM capacity, BBS container reservations (cfdot cell-states),
 #      rolling-upgrade headroom, and app-instance health (cfdot actual-lrps)
-#   6. CF API reachability and a quick app/org/space sanity check
-#   7. Upgrade readiness: Ops Manager pending changes, stemcell consistency,
-#      orphaned disks
+#   6. CF API reachability, a quick app/org/space sanity check, and the
+#      buildpack inventory (cf curl /v3/buildpacks — informational)
+#   7. Upgrade readiness: Ops Manager pending changes, the deployed product
+#      inventory (om — informational), stemcell consistency, orphaned disks
 #   8. Certificate expiry (Ops Manager) — a top cause of upgrade failures
 #   9. MySQL/Galera cluster health via mysql-diag — only when a dedicated
 #      mysql_monitor VM exists (full foundation); skipped in small-footprint
@@ -232,6 +234,19 @@ if [[ "${running_tasks:-0}" -gt 0 ]]; then
 else
   ok "No in-flight BOSH tasks."
 fi
+
+# Resurrector: the global toggle set by 'bosh update-resurrection on|off'. When
+# off, the health monitor does not recreate failed/missing VMs — commonly left
+# off after earlier maintenance. RESURRECTOR feeds the Markdown header row that
+# cf_health_dashboard.py turns into its Resurrector status box.
+RESURRECTOR="unverified"
+case "$(bosh curl /resurrection 2>/dev/null | jq -r '.resurrection | tostring' 2>/dev/null)" in
+  true)  RESURRECTOR="enabled"
+         ok "BOSH resurrector is enabled (bosh curl /resurrection).";;
+  false) RESURRECTOR="disabled"
+         crit "BOSH resurrector is DISABLED (bosh curl /resurrection) — failed VMs will not be recreated automatically; 'bosh update-resurrection on' before upgrading.";;
+  *)     info "Could not read resurrector status via 'bosh curl /resurrection' — verify manually (bosh update-resurrection on).";;
+esac
 
 # Recently errored tasks are a soft signal worth surfacing.
 err_tasks="$(bosh --json tasks --recent=25 2>/dev/null | jq -r '[.Tables[0].Rows[]? | select(.state=="error")] | length')"
@@ -657,6 +672,31 @@ if command -v cf >/dev/null && cf_t="$(cf target 2>/dev/null)"; then
     # Per-instance app crash state is covered at the Diego layer in section 5
     # (cfdot actual-lrps); use 'cf apps' per org for app-by-app detail.
     info "Per-instance crash state is reported in section 5 (Diego actual-LRPs)."
+
+    # Buildpack inventory (informational — not scored). One row per buildpack in
+    # detection order. Empty fields become '-' because tab is IFS whitespace and
+    # 'read' would otherwise collapse consecutive tabs and shift the columns.
+    BUILDPACKS="$(cf curl '/v3/buildpacks?per_page=5000' 2>/dev/null | jq -r '
+      def nz: if . == null or . == "" then "-" else tostring end;
+      [.resources[]?] | sort_by(.position)[] | [
+        (.position|nz), (.name|nz), (.stack|nz),
+        (if .enabled then "yes" else "no" end),
+        (if .locked  then "yes" else "no" end),
+        (.state|nz), (.filename|nz)
+      ] | @tsv' 2>/dev/null)"
+    if [[ -n "$BUILDPACKS" ]]; then
+      info "Buildpacks: $(grep -c . <<<"$BUILDPACKS") installed (position · name · stack · enabled/locked · file)"
+      while IFS=$'\t' read -r bpos bname bstack ben block bstate bfile; do
+        [[ -z "$bpos" ]] && continue
+        bflags=""
+        [[ "$ben" == no ]]    && bflags+=" · DISABLED"
+        [[ "$block" == yes ]] && bflags+=" · locked"
+        [[ "$bstate" != "-" && "$bstate" != READY ]] && bflags+=" · state ${bstate}"
+        info "  $(printf '%2s' "$bpos")  ${bname} (${bstack})${bflags} — ${bfile}"
+      done <<<"$BUILDPACKS"
+    else
+      info "Could not list buildpacks via 'cf curl /v3/buildpacks' — skipping the buildpack inventory."
+    fi
   else
     warn "CF CLI not logged in (no user/api in 'cf target') — skipping CF checks."
   fi
@@ -674,12 +714,16 @@ section "7. Upgrade Readiness"
 if command -v om >/dev/null; then
   # Pull the product label, identifier, version transition, errand count and guid
   # (the guid is the product's BOSH deployment name) for every staged change.
+  # Empty fields become '-': tab is IFS whitespace, so 'read' would collapse an
+  # empty column (no deployed version on install, no staged one on delete) and
+  # shift everything after it.
   pc="$(om curl -s -p /api/v0/staged/pending_changes 2>/dev/null | jq -r '
+    def nz: if . == null or . == "" then "-" else tostring end;
     .product_changes[]? | [
-      .action, .guid,
-      (.staged.identifier // .deployed.identifier // "?"),
-      (.staged.label      // .deployed.label      // "?"),
-      (.deployed.version // ""), (.staged.version // ""),
+      (.action|nz), (.guid|nz),
+      ((.staged.identifier // .deployed.identifier)|nz),
+      ((.staged.label      // .deployed.label)|nz),
+      (.deployed.version|nz), (.staged.version|nz),
       ((.errands // []) | length)
     ] | @tsv' 2>/dev/null)"
   if [[ -z "$pc" ]]; then
@@ -687,7 +731,9 @@ if command -v om >/dev/null; then
   else
     pc_changed=0
     while IFS=$'\t' read -r action guid ident label dver sver ecount; do
-      [[ -z "$action" || "$action" == "unchanged" ]] && continue
+      [[ -z "$action" || "$action" == "-" || "$action" == "unchanged" ]] && continue
+      [[ "$dver" == "-" ]] && dver=""; [[ "$sver" == "-" ]] && sver=""
+      [[ "$ident" == "-" ]] && ident="?"; [[ "$label" == "-" ]] && label="?"
       pc_changed=$((pc_changed+1))
       case "$action" in
         install) vtxt="install v${sver:-?}";;
@@ -699,6 +745,36 @@ if command -v om >/dev/null; then
       warn "Staged change: ${label} [${ident}] — ${vtxt} (deployment '${guid}')${errtxt}. Apply or revert before upgrading."
     done <<<"$pc"
     [[ $pc_changed -eq 0 ]] && ok "No pending Ops Manager changes (all products 'unchanged')."
+  fi
+
+  # Deployed product inventory from Ops Manager (informational — not scored):
+  # every tile incl. the director, with its deployed version, guid (= BOSH
+  # deployment name for tiles) and the staged version (differs from deployed
+  # when an Apply Changes is pending). '-' placeholders keep the TSV columns
+  # aligned for 'read'. Columns: label, type, deployed, guid, staged.
+  staged_json="$(om curl -s -p /api/v0/staged/products 2>/dev/null)"
+  jq -e 'type == "array"' <<<"$staged_json" >/dev/null 2>&1 || staged_json='[]'
+  PRODUCTS="$(om curl -s -p /api/v0/deployed/products 2>/dev/null | jq -r --argjson staged "$staged_json" '
+    def nz: if . == null or . == "" then "-" else tostring end;
+    (if type == "array" then .[] else empty end) | . as $p | [
+      ((.label // .type)|nz), (.type|nz), (.product_version|nz),
+      ((.guid // .installation_name)|nz),
+      (([$staged[] | select(.guid == $p.guid) | .product_version] | first)|nz)
+    ] | @tsv' 2>/dev/null | sort -f -t$'\t' -k2,2)"
+  if [[ -n "$PRODUCTS" ]]; then
+    # BOSH deployments Ops Manager does not own (e.g. on-demand service instances).
+    non_om=0
+    for d in "${DEPLOYMENTS[@]}"; do
+      cut -f4 <<<"$PRODUCTS" | grep -qxF "$d" || non_om=$((non_om+1))
+    done
+    info "Ops Manager deployed products: $(grep -c . <<<"$PRODUCTS") | BOSH deployments: ${#DEPLOYMENTS[@]} (${non_om} not an Ops Manager product, e.g. on-demand service instances)"
+    while IFS=$'\t' read -r plabel ptype pver pguid pstaged; do
+      [[ -z "$plabel" ]] && continue
+      pnote=""; [[ "$pstaged" != "-" && "$pstaged" != "$pver" ]] && pnote=" (staged v${pstaged})"
+      info "  ${plabel} [${ptype}] v${pver}${pnote} — deployment '${pguid}'"
+    done <<<"$PRODUCTS"
+  else
+    info "Could not read deployed products from Ops Manager — skipping the product inventory."
   fi
 else
   info "om CLI not available — skipping pending-changes check."
@@ -847,7 +923,8 @@ while IFS=$'\t' read -r dep stm; do
   printf '    %-28s %s\n' "$dep" "${stm:-none}"
 done <<<"$STEMCELLS_BY_DEP"
 
-printf '\n  %sCertificates:%s %s\n' "$BOLD" "$RST" "${CERT_SUMMARY:-not checked}"
+printf '\n  %sResurrector:%s %s\n' "$BOLD" "$RST" "${RESURRECTOR:-unverified}"
+printf '  %sCertificates:%s %s\n' "$BOLD" "$RST" "${CERT_SUMMARY:-not checked}"
 if [[ -n "${bbs_n:-}" && "${tot_cap:-0}" -gt 0 && "${max_tmem:-0}" -gt 0 ]]; then
   printf '  %sDiego headroom:%s %s free of %s (%s%%) — absorbs ≈%s concurrent cell drain(s)\n' \
     "$BOLD" "$RST" "$(mb_h "$tot_avail")" "$(mb_h "$tot_cap")" "${headroom:-?}" "$((tot_avail / max_tmem))"
@@ -888,8 +965,15 @@ if [[ $JSON_MODE -eq 1 ]]; then
         --argjson c "$CRIT_COUNT" --argjson ok "$OK_COUNT" --argjson hs "$HEALTH_SCORE" \
         --arg dir "${BOSH_ENVIRONMENT:-}" \
         --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" --argjson f "$findings_json" \
-        '{verdict:$v, health_score:$hs, exit_code:$ec, ok:$ok, warnings:$w, criticals:$c,
-          director:$dir, generated_at_utc:$ts, findings:$f}' >&3
+        --arg prods "${PRODUCTS:-}" --arg bps "${BUILDPACKS:-}" --arg res "${RESURRECTOR:-unverified}" \
+        'def rows: split("\n")|map(select(length>0)|split("\t"));
+         def un: if . == "-" then null else . end;
+         {verdict:$v, health_score:$hs, exit_code:$ec, ok:$ok, warnings:$w, criticals:$c,
+          director:$dir, resurrector:$res, generated_at_utc:$ts, findings:$f,
+          products: ($prods|rows|map({label:.[0], type:.[1], version:.[2], deployment:.[3], staged_version:(.[4]|un)})),
+          buildpacks: ($bps|rows|map({position:(.[0]|tonumber? // null), name:.[1], stack:(.[2]|un),
+                                       enabled:(.[3]=="yes"), locked:(.[4]=="yes"),
+                                       state:(.[5]|un), filename:(.[6]|un)}))}' >&3
 fi
 
 # Markdown report (fd 3 = the real stdout). Convert to PDF off-box, e.g.:
@@ -912,6 +996,12 @@ if [[ $MD_MODE -eq 1 ]]; then
     stm_used="$(cut -f2 <<<"$STEMCELLS_BY_DEP" | tr ',' '\n' | sed 's/^ *//;s/ *$//;/^$/d' \
                 | grep -vE '^(none|errand-only)' | sort -u | paste -sd $'\t' - | sed 's/\t/<br>/g')"
     printf '| **Stemcell(s) in use** | %s |\n' "${stm_used:-?}"
+    # Read by cf_health_dashboard.py (Resurrector box): enabled | disabled | unverified.
+    case "${RESURRECTOR:-unverified}" in
+      enabled)  printf '| **Resurrector** | ✅ enabled |\n';;
+      disabled) printf '| **Resurrector** | ❌ disabled — run `bosh update-resurrection on` before upgrading |\n';;
+      *)        printf '| **Resurrector** | ⚠️ unverified — `bosh curl /resurrection` unavailable |\n';;
+    esac
     printf '| **Certificates** | %s |\n' "${CERT_SUMMARY:-not checked}"
     # Diego headroom, when the BBS view was available: free/total cell RAM and the
     # drain ceiling (how many cells can be recreated concurrently before the
@@ -972,8 +1062,35 @@ if [[ $MD_MODE -eq 1 ]]; then
 
     printf '\n## 6. Cloud Foundry API\n\n'; md_bullets "Cloud Foundry API"
     [[ -n "${orgs:-}" ]] && printf '\n_Orgs: %s · Spaces: %s · Apps: %s._\n' "${orgs}" "${spaces:-?}" "${apps:-?}"
+    # Table header/shape is a contract with cf_health_dashboard.py (it matches
+    # "**Buildpacks:**" + "| # | Buildpack | Stack | Version |" and a plain
+    # |---| separator) — keep it exactly like this.
+    if [[ -n "${BUILDPACKS:-}" ]]; then
+      printf '\n**Buildpacks:**\n\n| # | Buildpack | Stack | Version |\n|---|---|---|---|\n'
+      while IFS=$'\t' read -r bpos bname bstack ben block bstate bfile; do
+        [[ -z "$bpos" ]] && continue
+        # Version comes from the filename (…-v1.2.3.zip); fall back to the filename.
+        bver="$bfile"; [[ "$bfile" =~ -(v[0-9][^.]*(\.[0-9]+)*(\+[0-9]+)?)\.zip$ ]] && bver="${BASH_REMATCH[1]}"
+        [[ "$ben" == no ]] && bname+=" (disabled)"
+        # Non-READY state goes on the name: the dashboard's Version column is narrow.
+        if [[ "$bstate" != "-" && "$bstate" != READY ]]; then
+          bstate_lc="$(tr 'A-Z_' 'a-z ' <<<"$bstate")"; bname+=" (${bstate_lc})"
+        fi
+        printf '| %s | %s | %s | %s |\n' "$bpos" "$bname" "$bstack" "$bver"
+      done <<<"$BUILDPACKS"
+    fi
 
     printf '\n## 7. Upgrade Readiness\n\n'; md_bullets "Upgrade Readiness"
+    # Same contract with cf_health_dashboard.py: "**Deployed tiles:**" +
+    # "| Tile | Deployed | Staged |", exactly three cells per row, inside section 7.
+    if [[ -n "${PRODUCTS:-}" ]]; then
+      printf '\n**Deployed tiles:**\n\n| Tile | Deployed | Staged |\n|---|---|---|\n'
+      while IFS=$'\t' read -r plabel ptype pver pguid pstaged; do
+        [[ -z "$plabel" ]] && continue
+        [[ "$pstaged" == "-" ]] && pstaged=""
+        printf '| %s | %s | %s |\n' "$ptype" "$pver" "$pstaged"
+      done <<<"$PRODUCTS"
+    fi
     if [[ -n "$STEMCELLS_BY_DEP" ]]; then
       printf '\n**Stemcells in use:**\n\n| Deployment | Stemcell |\n|---|---|\n'
       while IFS=$'\t' read -r dep stm; do
